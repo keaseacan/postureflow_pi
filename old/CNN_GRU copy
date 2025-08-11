@@ -1,0 +1,307 @@
+# train_position_model_group_f1_thresholds.py
+# Python 3.9+ — group-aware RF baseline tuned on macro-F1 + OOF thresholding
+
+import argparse
+import json
+import joblib
+import numpy as np
+import pandas as pd
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.model_selection import (
+    train_test_split, StratifiedKFold, RandomizedSearchCV,
+    GroupKFold, StratifiedGroupKFold, cross_val_predict
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, LabelEncoder, OrdinalEncoder
+from sklearn.ensemble import RandomForestClassifier
+
+# ----------------------
+# Config (edit if needed)
+# ----------------------
+TARGET_COL = None        # e.g. "position" | "label" | "class"
+TEST_SIZE = 0.2
+RANDOM_STATE = 42
+N_JOBS = -1
+GROUP_COL_CANDIDATES = ["person", "person_id", "subject_id", "session_id", "participant", "pid"]
+
+# ----- helpers -----
+def guess_target_column(df: pd.DataFrame):
+    lower_cols = {c.lower(): c for c in df.columns}
+    for key in ["label", "labels", "class", "target", "position", "posture"]:
+        if key in lower_cols:
+            return lower_cols[key]
+    return df.columns[-1]
+
+def detect_group_column(df: pd.DataFrame):
+    for c in GROUP_COL_CANDIDATES:
+        if c in df.columns:
+            return c
+    for c in df.columns:
+        if c.lower() in {"person", "user", "subject"}:
+            return c
+    return ""
+
+def load_table(path: str) -> pd.DataFrame:
+    if path.lower().endswith((".xlsx", ".xls")):
+        return pd.read_excel(path)
+    if path.lower().endswith(".csv"):
+        return pd.read_csv(path)
+    try:
+        return pd.read_excel(path)
+    except Exception:
+        return pd.read_csv(path)
+
+def tune_thresholds_ovr(y_true, proba, grid=None):
+    """
+    One-vs-rest threshold search per class to maximize macro-F1 on OOF predictions.
+    Returns a dict {class_index: threshold}.
+    """
+    if grid is None:
+        grid = np.linspace(0.2, 0.8, 13)  # 0.20..0.80 inclusive
+
+    y_true = np.asarray(y_true)
+    C = proba.shape[1]
+    best_thresh = np.full(C, 1.0 / C, dtype=float)
+    for c in range(C):
+        y_bin = (y_true == c).astype(int)
+        best_f1, best_t = -1.0, best_thresh[c]
+        for t in grid:
+            pred_c = (proba[:, c] >= t).astype(int)
+            # Safety: avoid all-zero predictions
+            if pred_c.sum() == 0:
+                k = max(1, int(0.01 * len(pred_c)))
+                topk = np.argsort(-proba[:, c])[:k]
+                pred_c[topk] = 1
+            f1 = f1_score(y_bin, pred_c, zero_division=0)
+            if f1 > best_f1:
+                best_f1, best_t = f1, t
+        best_thresh[c] = best_t
+    return {i: float(t) for i, t in enumerate(best_thresh)}
+
+def apply_thresholds(proba, thresholds):
+    """
+    Convert probabilities to labels using per-class thresholds:
+    choose argmax of (p_i / t_i). Guarantees a class is chosen.
+    """
+    t = np.array([thresholds[i] for i in range(proba.shape[1])])[None, :]
+    ratios = proba / np.clip(t, 1e-6, None)
+    return ratios.argmax(axis=1)
+
+def main(args):
+    df = load_table(args.data)
+
+    # 1) Drop columns that are entirely NaN (these break median imputation)
+    #    (also handles 'mean duration' being all-NaN)
+    all_nan_cols = df.columns[df.isna().all()].tolist()
+    if all_nan_cols:
+        print("Dropping all-NaN columns:", all_nan_cols)
+        df = df.drop(columns=all_nan_cols)
+
+    # 2) Target column
+    target_col = TARGET_COL or guess_target_column(df)
+    if target_col not in df.columns:
+        raise ValueError(f"Target column '{target_col}' not found. Columns: {list(df.columns)}")
+
+    # 2.1) Optional group column (person/session)
+    group_col = detect_group_column(df)
+    groups = df[group_col] if group_col else None
+    if groups is not None:
+        print(f"Using group column for split/CV: '{group_col}'")
+
+    y_raw = df[target_col]
+    drop_cols = [target_col] + ([group_col] if groups is not None else [])
+    X = df.drop(columns=drop_cols)
+
+    # 3) Feature typing
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in X.columns if c not in num_cols]
+
+    # Ensure categorical features are strings (OrdinalEncoder expects array-like)
+    if cat_cols:
+        for c in cat_cols:
+            X[c] = X[c].astype(str)
+
+    # 4) Label encoding
+    le = LabelEncoder()
+    y = le.fit_transform(y_raw)
+    class_names = le.classes_
+
+    # 5) Preprocessors
+    numeric_pre = Pipeline(steps=[
+        ("impute", SimpleImputer(strategy="median")),
+        ("scale",  StandardScaler(with_mean=True, with_std=True)),
+    ])
+    cat_pre = Pipeline(steps=[
+        ("impute", SimpleImputer(strategy="most_frequent")),
+        ("ord",    OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)),
+    ]) if cat_cols else "drop"
+
+    pre = ColumnTransformer(
+        transformers=[
+            ("num", numeric_pre, num_cols),
+            ("cat", cat_pre, cat_cols),
+        ],
+        remainder="drop",
+    )
+
+    # 6) Classifier
+    clf = RandomForestClassifier(
+        n_estimators=400,
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        class_weight="balanced",
+        random_state=RANDOM_STATE,
+        n_jobs=N_JOBS,
+    )
+    pipe = Pipeline(steps=[("pre", pre), ("clf", clf)])
+
+    # 7) Group-aware holdout split (no person leakage)
+    if groups is None or args.ignore_groups:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
+        )
+        groups_train = None
+        print("No group column found -> using plain stratified holdout.")
+    else:
+        rng = np.random.default_rng(RANDOM_STATE)
+        uniq = groups.unique()
+        rng.shuffle(uniq)
+        n_test_groups = max(1, int(round(TEST_SIZE * len(uniq))))
+        test_groups = set(uniq[:n_test_groups])
+        test_mask = groups.isin(test_groups)
+
+        X_train, X_test = X[~test_mask], X[test_mask]
+        y_train, y_test = y[~test_mask], y[mask := test_mask]
+        groups_train = groups[~test_mask].values
+        print(f"Group holdout -> train groups: {len(uniq)-n_test_groups}, test groups: {n_test_groups}")
+
+    # 8) CV splitter (group-aware if we have groups)
+    if groups_train is None:
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        print("CV: StratifiedKFold (5 folds)")
+    else:
+        n_groups = len(np.unique(groups_train))
+        n_splits_eff = max(2, min(3, n_groups))  # small-data safe
+        try:
+            cv = StratifiedGroupKFold(n_splits=n_splits_eff, shuffle=True, random_state=RANDOM_STATE)
+            print(f"CV: StratifiedGroupKFold ({n_splits_eff} folds)")
+        except Exception:
+            cv = GroupKFold(n_splits=n_splits_eff)
+            print(f"CV: GroupKFold ({n_splits_eff} folds)")
+
+    # 9) Hyperparam tuning (macro-F1)
+    if not args.no_tune:
+        param_dist = {
+            "clf__n_estimators": [200, 300, 400, 600, 800],
+            "clf__max_depth": [None, 6, 10, 14, 18, 24],
+            "clf__min_samples_split": [2, 4, 6, 10],
+            "clf__min_samples_leaf": [1, 2, 3, 5],
+            "clf__max_features": ["sqrt", "log2", 0.3, 0.5, 0.7],
+        }
+        search = RandomizedSearchCV(
+            estimator=pipe,
+            param_distributions=param_dist,
+            n_iter=30,
+            scoring="f1_macro",
+            n_jobs=N_JOBS,
+            cv=cv,
+            random_state=RANDOM_STATE,
+            verbose=1,
+            refit=True,
+        )
+        if groups_train is None:
+            search.fit(X_train, y_train)
+        else:
+            search.fit(X_train, y_train, groups=groups_train)
+        model = search.best_estimator_
+        print("\nBest params:", json.dumps(search.best_params_, indent=2, default=str))
+    else:
+        model = pipe.fit(X_train, y_train)
+
+    # 10) Learn per-class thresholds from OOF predictions on training set
+    if groups_train is None:
+        oof_splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    else:
+        n_groups = len(np.unique(groups_train))
+        n_splits_eff = max(2, min(3, n_groups))
+        try:
+            oof_splitter = StratifiedGroupKFold(n_splits=n_splits_eff, shuffle=True, random_state=RANDOM_STATE)
+        except Exception:
+            oof_splitter = GroupKFold(n_splits=n_splits_eff)
+
+    oof_proba = cross_val_predict(
+        model, X_train, y_train,
+        cv=oof_splitter,
+        method="predict_proba",
+        n_jobs=N_JOBS,
+        groups=groups_train
+    )
+    thresholds = tune_thresholds_ovr(y_train, oof_proba)
+    print("Learned per-class thresholds (OOF):", {class_names[i]: round(t, 3) for i, t in thresholds.items()})
+
+    # 11) Evaluate on held-out test person(s) with thresholding
+    test_proba = model.predict_proba(X_test)
+    y_pred_thresh = apply_thresholds(test_proba, thresholds)
+    acc = accuracy_score(y_test, y_pred_thresh)
+    mf1 = f1_score(y_test, y_pred_thresh, average="macro")
+    print(f"\nTest accuracy (thresholded): {acc:.4f}")
+    print(f"Test macro-F1 (thresholded): {mf1:.4f}")
+    print("\nClassification report (thresholded):\n",
+          classification_report(y_test, y_pred_thresh, target_names=class_names, zero_division=0))
+    print("Confusion matrix (thresholded):\n", confusion_matrix(y_test, y_pred_thresh))
+
+    # (Optional) also show plain argmax for comparison
+    y_pred_plain = test_proba.argmax(axis=1)
+    print("\n[Optional] Plain argmax macro-F1:",
+          f1_score(y_test, y_pred_plain, average='macro'))
+
+    # 12) Save bundle (include thresholds)
+    joblib.dump(
+        {
+            "pipeline": model,
+            "label_encoder": le,
+            "classes": class_names.tolist(),
+            "thresholds": thresholds,              # <-- saved
+            "target_col": target_col,
+            "numeric_features": num_cols,
+            "categorical_features": cat_cols,
+            "group_col": (group_col or ""),
+            "sklearn_version": __import__("sklearn").__version__,
+        },
+        args.out,
+    )
+    print(f"\nSaved model to: {args.out}")
+
+    print(
+        "\nExample (inference):\n"
+        "import joblib, numpy as np, pandas as pd\n"
+        f'm = joblib.load("{args.out}")\n'
+        "# X_new = pd.DataFrame([...])  # same feature columns as training\n"
+        "proba = m['pipeline'].predict_proba(X_new)\n"
+        "def _apply_thresholds(proba, thresholds):\n"
+        "    import numpy as _np\n"
+        "    t = _np.array([thresholds[i] for i in range(proba.shape[1])])[None, :]\n"
+        "    ratios = proba / _np.clip(t, 1e-6, None)\n"
+        "    return ratios.argmax(axis=1)\n"
+        "y_hat = _apply_thresholds(proba, m['thresholds'])\n"
+        "labels = m['label_encoder'].inverse_transform(y_hat)\n"
+        "print(labels)\n"
+    )
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Group-aware RF classifier with macro-F1 tuning + OOF thresholding.")
+    parser.add_argument("--data", type=str, default="breathing_featuresUPZ.xlsx",
+                        help="Path to your dataset (Excel or CSV).")
+    parser.add_argument("--out", type=str, default="position_model.joblib",
+                        help="Output path for the saved model bundle.")
+    parser.add_argument("--no-tune", action="store_true",
+                        help="Skip RandomizedSearchCV hyperparameter tuning.")
+    parser.add_argument("--ignore-groups", action="store_true",
+                        help="Ignore any person/session grouping even if present.")
+    args = parser.parse_args()
+    main(args)
+

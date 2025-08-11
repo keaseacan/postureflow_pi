@@ -1,0 +1,192 @@
+# train_position_model_fixed.py
+# Python 3.9+ baseline for human position/posture classification
+# Fixes:
+#  - Drops all-NaN columns (e.g., 'mean duration')
+#  - Replaces custom Factorizer with OrdinalEncoder (works with NumPy inside ColumnTransformer)
+
+import argparse
+import json
+import joblib
+import numpy as np
+import pandas as pd
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split, StratifiedKFold, RandomizedSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, LabelEncoder, OrdinalEncoder
+from sklearn.ensemble import RandomForestClassifier
+
+# ----------------------
+# Config (edit if needed)
+# ----------------------
+TARGET_COL = None        # e.g. "position" | "label" | "class"
+TEST_SIZE = 0.2
+RANDOM_STATE = 42
+N_JOBS = -1
+
+def guess_target_column(df: pd.DataFrame):
+    lower_cols = {c.lower(): c for c in df.columns}
+    for key in ["label", "labels", "class", "target", "position", "posture"]:
+        if key in lower_cols:
+            return lower_cols[key]
+    return df.columns[-1]
+
+def load_table(path: str) -> pd.DataFrame:
+    if path.lower().endswith((".xlsx", ".xls")):
+        return pd.read_excel(path)
+    if path.lower().endswith(".csv"):
+        return pd.read_csv(path)
+    # Fallbacks
+    try:
+        return pd.read_excel(path)
+    except Exception:
+        return pd.read_csv(path)
+
+def main(args):
+    df = load_table(args.data)
+
+    # 1) Drop columns that are entirely NaN (these break median imputation)
+    all_nan_cols = df.columns[df.isna().all()].tolist()
+    if all_nan_cols:
+        print("Dropping all-NaN columns:", all_nan_cols)
+        df = df.drop(columns=all_nan_cols)
+
+    # 2) Target column
+    target_col = TARGET_COL or guess_target_column(df)
+    if target_col not in df.columns:
+        raise ValueError(f"Target column '{target_col}' not found. Columns: {list(df.columns)}")
+
+    y_raw = df[target_col]
+    X = df.drop(columns=[target_col])
+
+    # 3) Feature typing
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in X.columns if c not in num_cols]
+
+    # Ensure categorical features are strings (OrdinalEncoder expects array-like)
+    if cat_cols:
+        for c in cat_cols:
+            X[c] = X[c].astype(str)
+
+    # 4) Label encoding
+    le = LabelEncoder()
+    y = le.fit_transform(y_raw)
+
+    # 5) Preprocessors
+    numeric_pre = Pipeline(steps=[
+        # If you prefer to keep NaN-only numeric columns, swap to strategy="constant", fill_value=0.0
+        ("impute", SimpleImputer(strategy="median")),
+        ("scale", StandardScaler(with_mean=True, with_std=True)),
+    ])
+
+    cat_pre = Pipeline(steps=[
+        ("impute", SimpleImputer(strategy="most_frequent")),
+        ("ord", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)),
+    ]) if cat_cols else "drop"
+
+    pre = ColumnTransformer(
+        transformers=[
+            ("num", numeric_pre, num_cols),
+            ("cat", cat_pre, cat_cols),
+        ],
+        remainder="drop",
+        # ColumnTransformer has no n_jobs; inner steps can be parallelized
+    )
+
+    # 6) Classifier
+    clf = RandomForestClassifier(
+        n_estimators=400,
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        class_weight="balanced",
+        random_state=RANDOM_STATE,
+        n_jobs=N_JOBS,
+    )
+
+    pipe = Pipeline(steps=[("pre", pre), ("clf", clf)])
+
+    # 7) Optional tuning
+    if not args.no_tune:
+        param_dist = {
+            "clf__n_estimators": [200, 300, 400, 600, 800],
+            "clf__max_depth": [None, 6, 10, 14, 18, 24],
+            "clf__min_samples_split": [2, 4, 6, 10],
+            "clf__min_samples_leaf": [1, 2, 3, 5],
+            "clf__max_features": ["sqrt", "log2", 0.3, 0.5, 0.7],
+        }
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+        search = RandomizedSearchCV(
+            estimator=pipe,
+            param_distributions=param_dist,
+            n_iter=30,
+            scoring="accuracy",
+            n_jobs=N_JOBS,
+            cv=cv,
+            random_state=RANDOM_STATE,
+            verbose=1,
+            # Set to "raise" if you want CV to fail loudly instead of skipping bad fits:
+            # error_score="raise",
+        )
+        pipe = search
+
+    # 8) Split/train
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
+    )
+    pipe.fit(X_train, y_train)
+
+    # 9) Unwrap best estimator if tuned
+    if hasattr(pipe, "best_estimator_"):
+        print("\nBest params:", json.dumps(pipe.best_params_, indent=2, default=str))
+        model = pipe.best_estimator_
+    else:
+        model = pipe
+
+    # 10) Evaluate
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    print(f"\nTest accuracy: {acc:.4f}")
+    print("\nClassification report:\n", classification_report(y_test, y_pred, target_names=le.classes_))
+    print("Confusion matrix:\n", confusion_matrix(y_test, y_pred))
+
+    # 11) Save bundle
+        # 11) Save bundle
+    joblib.dump(
+        {
+            "pipeline": model,
+            "label_encoder": le,
+            "classes": le.classes_.tolist(),
+            "target_col": target_col,
+            "numeric_features": num_cols,
+            "categorical_features": cat_cols,
+            "sklearn_version": __import__("sklearn").__version__,
+        },
+        args.out,
+    )
+    print(f"\nSaved model to: {args.out}")
+
+    print(
+        "\nExample (inference):\n"
+        "import joblib, pandas as pd\n"
+        f'm = joblib.load("{args.out}")\n'
+        "# X_new = pd.DataFrame([...])  # same feature columns as training\n"
+        'y_hat = m["pipeline"].predict(X_new)\n'
+        'labels = m["label_encoder"].inverse_transform(y_hat)\n'
+        "print(labels)\n"
+    )
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train a position classifier (Python 3.9+).")
+    parser.add_argument("--data", type=str, default="breathing_featuresUPZ.xlsx",
+                        help="Path to your dataset (Excel or CSV).")
+    parser.add_argument("--out", type=str, default="position_model.joblib",
+                        help="Output path for the saved model bundle.")
+    parser.add_argument("--no-tune", action="store_true",
+                        help="Skip RandomizedSearchCV hyperparameter tuning.")
+    args = parser.parse_args()
+    main(args)
+
+

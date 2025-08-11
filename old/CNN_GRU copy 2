@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+# cnn_gru_pure_8020_stacked.py — Pure-window CNN+GRU with context stacking and 80/20 test split
+
+import os, argparse
+import numpy as np, pandas as pd
+from collections import Counter, defaultdict
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score
+from sklearn.model_selection import train_test_split
+
+import tensorflow as tf
+from tensorflow.keras import layers, models, callbacks
+
+# ---------- column heuristics ----------
+POSSIBLE_LABEL_KEYS = ["label","posture","class","state","activity","gesture","position","Position"]
+POSSIBLE_GROUP_KEYS = ["person","person_id","subject","subject_id","session","session_id",
+                       "file","filename","record","recording","segment","segment_id","trial","run"]
+DROP_COLS_CANDS = ["timestamp","time","frame","idx","index"]
+
+def find_label_column(df):
+    low = {c.lower(): c for c in df.columns}
+    for k in POSSIBLE_LABEL_KEYS:
+        if k.lower() in low: return low[k.lower()]
+    for c in df.columns:
+        if any(k.lower() in c.lower() for k in POSSIBLE_LABEL_KEYS): return c
+    # low-card fallback
+    n = len(df); cands=[]
+    for c in df.columns:
+        try: u = df[c].nunique(dropna=True)
+        except: continue
+        if 1 < u <= 10 and (u/max(1,n)) < 0.2: cands.append((str(df[c].dtype), u, c))
+    if cands:
+        cands.sort(key=lambda t:(t[0]!="object", t[1])); return cands[0][2]
+    raise ValueError("No label column found; pass --label or rename to 'label'/'posture'.")
+
+def find_group_column(df):
+    low = {c.lower(): c for c in df.columns}
+    for k in POSSIBLE_GROUP_KEYS:
+        if k.lower() in low: return low[k.lower()]
+    for c in df.columns:
+        if any(k.lower() in c.lower() for k in POSSIBLE_GROUP_KEYS): return c
+    return None
+
+# ---------- segmentation (no label crossing) ----------
+def make_segments_no_label_cross(df, label_col, group_col=None):
+    if group_col:
+        df = df.sort_values([group_col]).reset_index(drop=True)
+        g = df[group_col].astype(str); l = df[label_col].astype(str)
+        chg = (g != g.shift()) | (l != l.shift())
+        df["_seg"] = chg.cumsum()
+    else:
+        df["_seg"] = (df[label_col].shift() != df[label_col]).cumsum()
+    return df, "_seg"
+
+# ---------- purity windowing ----------
+def majority_label(lbls, n_classes):
+    counts = np.bincount(lbls, minlength=n_classes)
+    top = int(counts.argmax()); conf = float(counts[top]/counts.sum())
+    return top, conf
+
+def windowize_with_purity(X_all, y_all, seq_indices, window, hop, n_classes, min_purity=0.7):
+    Xw, Yw, Gw = [], [], []
+    for g, idxs in seq_indices.items():
+        idxs = np.array(sorted(idxs))
+        n = len(idxs); s = 0
+        while s + window <= n:
+            seg = idxs[s:s+window]
+            lab, conf = majority_label(y_all[seg], n_classes)
+            if conf >= min_purity:
+                Xw.append(X_all[seg,:]); Yw.append(lab); Gw.append(g)
+            s += hop
+    return np.asarray(Xw, np.float32), np.asarray(Yw, np.int64), np.asarray(Gw)
+
+# ---------- stack adjacent windows for more context ----------
+def stack_adjacent_windows(Xw, Yw, Gw, k=3):
+    """
+    Concatenate k consecutive pure windows from the same segment (Gw)
+    and same label (Yw) → 'super-window' of shape (k*T, F).
+    """
+    if k <= 1: return Xw, Yw, Gw
+    out_X, out_Y, out_G = [], [], []
+    T = Xw.shape[1]
+    uniq_g = np.unique(Gw)
+    for g in uniq_g:
+        idxs = np.where(Gw == g)[0]
+        idxs = idxs[np.argsort(idxs)]  # keep order
+        for i in range(len(idxs) - k + 1):
+            block = idxs[i:i+k]
+            if np.all(Yw[block] == Yw[block[0]]):
+                xcat = Xw[block].reshape(k*T, Xw.shape[2])
+                out_X.append(xcat); out_Y.append(Yw[block[0]]); out_G.append(g)
+    if not out_X:  # fallback if nothing stacked
+        return Xw, Yw, Gw
+    return np.asarray(out_X, np.float32), np.asarray(out_Y, np.int64), np.asarray(out_G)
+
+# ---------- 80/20 by window count (group-aware) ----------
+def weighted_group_test_split(Yw, Gw, test_frac=0.2, min_test_windows=40,
+                              require_all_classes=False, max_tries=500, seed=42):
+    rng = np.random.RandomState(seed)
+    idxs = np.arange(len(Yw))
+    g2i = defaultdict(list)
+    for i,g in enumerate(Gw): g2i[g].append(i)
+    groups = list(g2i.keys()); total = len(Yw)
+    desired = max(int(round(test_frac*total)), int(min_test_windows))
+    desired = min(desired, max(1, total-5))  # leave >=5 for train
+    all_classes = np.unique(Yw)
+    best, best_gap = None, 10**9
+    for _ in range(max_tries):
+        chosen, cnt = [], 0
+        for g in rng.permutation(groups):
+            chosen.append(g); cnt += len(g2i[g])
+            if cnt >= desired: break
+        test_idx = np.concatenate([g2i[g] for g in chosen]) if chosen else np.array([], int)
+        mask = np.ones(total, bool); mask[test_idx]=False
+        train_idx = idxs[mask]
+        ok = True
+        if require_all_classes and len(test_idx)>0:
+            present = np.unique(Yw[test_idx]); ok = (len(np.setdiff1d(all_classes, present))==0)
+        gap = abs(len(test_idx) - desired)
+        if ok and gap < best_gap:
+            best, best_gap = (train_idx, test_idx), gap
+            if gap <= max(1, int(0.01*desired)): break
+        elif best is None or gap < best_gap:
+            best, best_gap = (train_idx, test_idx), gap
+    return best
+
+# ---------- model ----------
+def build_model(input_shape, n_classes, conv=(64,128), kernels=(5,3), gru=128, drop=0.3):
+    x = inp = layers.Input(shape=input_shape)
+    for ch,k in zip(conv, kernels):
+        x = layers.Conv1D(ch,k,padding="same")(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ReLU()(x)
+        x = layers.MaxPooling1D(2)(x)
+        x = layers.Dropout(drop)(x)
+    x = layers.GRU(gru, dropout=drop)(x)
+    x = layers.Dense(128, activation="relu")(x)
+    x = layers.Dropout(drop)(x)
+    out = layers.Dense(n_classes, activation="softmax")(x)
+    m = models.Model(inp, out)
+    m.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+              loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    return m
+
+# ---------- rebalance ----------
+def rebalance_indices_by_class(y, target=None, seed=42):
+    rng = np.random.RandomState(seed)
+    y = np.asarray(y); idxs = np.arange(len(y))
+    byc = {c: idxs[y==c] for c in np.unique(y)}
+    if not byc: return np.array([], int)
+    if target is None: target = max(len(v) for v in byc.values())
+    keep=[]
+    for c, arr in byc.items():
+        if len(arr) >= target: keep.extend(rng.choice(arr, size=target, replace=False))
+        else:
+            extra = rng.choice(arr, size=target-len(arr), replace=True)
+            keep.extend(np.concatenate([arr, extra]))
+    return np.array(rng.permutation(keep), int)
+
+def main():
+    ap = argparse.ArgumentParser("Pure-window CNN+GRU (context-stacked, short segments friendly)")
+    ap.add_argument("--excel", type=str, help="Path to .xlsx")
+    ap.add_argument("--sheet", type=str, default=None)
+    ap.add_argument("--label", type=str, default=None)
+    ap.add_argument("--group", type=str, default=None)
+    ap.add_argument("--window", type=int, default=12)
+    ap.add_argument("--hop", type=int, default=3)
+    ap.add_argument("--min_purity", type=float, default=0.7)
+    ap.add_argument("--stack", type=int, default=3, help="How many adjacent windows to stack for context")
+    ap.add_argument("--epochs", type=int, default=80)
+    ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--min_test_windows", type=int, default=60)
+    ap.add_argument("--require_all_classes", action="store_true")
+    args = ap.parse_args()
+
+    np.random.seed(args.seed); tf.random.set_seed(args.seed)
+
+    # load excel (ignore "~$")
+    path = args.excel
+    if path is None:
+        cands = [f for f in os.listdir(".") if f.lower().endswith(".xlsx") and not os.path.basename(f).startswith("~$")]
+        if not cands: raise FileNotFoundError("No --excel and no .xlsx in CWD.")
+        path = cands[0]; print(f"[info] Using Excel from CWD: {path}")
+    if not os.path.isfile(path): raise FileNotFoundError(path)
+    df = pd.read_excel(path, sheet_name=args.sheet if args.sheet else 0, engine="openpyxl")
+    print(f"[info] Loaded: {path} shape={df.shape}")
+
+    label_col = args.label if (args.label and args.label in df.columns) else find_label_column(df)
+    print(f"[info] Label column: {label_col}")
+    group_col = args.group if (args.group and args.group in df.columns) else find_group_column(df)
+    print(f"[info] Group/segment column: {group_col}")
+
+    forbid = set([label_col] + ([group_col] if group_col else []))
+    drop_cols = [c for c in df.columns if c.lower() in DROP_COLS_CANDS]
+    feat_cols = [c for c in df.columns if c not in forbid and c not in drop_cols and pd.api.types.is_numeric_dtype(df[c])]
+    if not feat_cols: raise ValueError("No numeric feature columns found.")
+    print(f"[info] Using {len(feat_cols)} features.")
+
+    classes = sorted(df[label_col].astype(str).unique())
+    class_to_idx = {c:i for i,c in enumerate(classes)}
+    print(f"[info] Classes: {classes}")
+
+    # segmentation and label rebuild
+    df_seg, seg_key = make_segments_no_label_cross(df.copy(), label_col, group_col)
+    y_int = df_seg[label_col].astype(str).map(class_to_idx).to_numpy(dtype=np.int64)
+    groups = df_seg.groupby(seg_key, sort=False).indices
+    seg_lengths = np.array([len(v) for v in groups.values()])
+    print(f"[diag] segment lengths  n={len(seg_lengths)}  min={seg_lengths.min()}  "
+          f"p50={np.median(seg_lengths)}  p90={np.percentile(seg_lengths,90)}  max={seg_lengths.max()}")
+
+    X_all = df_seg[feat_cols].to_numpy(np.float32)
+
+    # adaptive windowing aiming for >=60 windows & >=2 classes before stacking
+    MIN_WINDOWS = 60
+    W, H, purity = args.window, args.hop, args.min_purity
+    for _ in range(10):
+        Xw, Yw, Gw = windowize_with_purity(X_all, y_int, groups, W, H, len(classes), purity)
+        cls_present = np.unique(Yw) if len(Xw) else []
+        if len(Xw) >= MIN_WINDOWS and len(cls_present) >= 2:
+            break
+        W = max(8, int(W*0.75))
+        H = max(2, int(max(2, H*0.75)))
+        purity = max(0.5, round(purity-0.05, 2))
+        print(f"[warn] Not enough samples (N={len(Xw)}, classes={len(cls_present)}); "
+              f"relaxing to window={W}, hop={H}, min_purity={purity:.2f}")
+    if len(Xw) < 2:
+        raise ValueError("Too few samples after relaxations. Try --window 8 --hop 2 --min_purity 0.5")
+
+    print(f"[info] Windows (pre-stack): N={len(Xw)}, T={Xw.shape[1]}, F={Xw.shape[2]}")
+    print(f"[diag] Class counts (pre-stack): {Counter(Yw)}")
+
+    # stack adjacent windows for more temporal context
+    Xw, Yw, Gw = stack_adjacent_windows(Xw, Yw, Gw, k=args.stack)
+    print(f"[info] After stacking: N={len(Xw)}, T={Xw.shape[1]}, F={Xw.shape[2]}")
+    print(f"[diag] Class counts (stacked): {Counter(Yw)}")
+
+    # 80/20 split with minimum test size (segment-aware by '_seg' groups)
+    train_idx, test_idx = weighted_group_test_split(
+        Yw, Gw, test_frac=0.2, min_test_windows=args.min_test_windows,
+        require_all_classes=args.require_all_classes, seed=args.seed
+    )
+    X_train, X_test = Xw[train_idx], Xw[test_idx]
+    y_train, y_test = Yw[train_idx], Yw[test_idx]
+    if len(X_train) < 5:
+        # if test ate too much, make a simple head/tail split as fallback
+        keep = max(1, len(Xw)-5)
+        train_idx, test_idx = np.arange(keep), np.arange(keep, len(Xw))
+        X_train, X_test, y_train, y_test = Xw[train_idx], Xw[test_idx], Yw[train_idx], Yw[test_idx]
+
+    print(f"[info] Final split — train: {len(X_train)}, test: {len(X_test)}")
+    print(f"[diag] Train class counts: {Counter(y_train)}")
+    print(f"[diag] Test  class counts: {Counter(y_test)}")
+
+    # rebalance train
+    if len(X_train) == 0: raise ValueError("Train split empty; lower --min_test_windows or window size.")
+    if len(np.unique(y_train)) >= 1:
+        target = min(300, max(Counter(y_train).values()))
+        keep = rebalance_indices_by_class(y_train, target=target, seed=args.seed)
+        if len(keep) > 0:
+            X_train, y_train = X_train[keep], y_train[keep]
+            print(f"[info] Train counts after rebalance: {Counter(y_train)}")
+
+    # scale
+    F = X_train.shape[-1]
+    scaler = StandardScaler().fit(X_train.reshape(-1, F))
+    X_train = scaler.transform(X_train.reshape(-1, F)).reshape(X_train.shape).astype(np.float32)
+    X_test  = scaler.transform(X_test.reshape(-1, F)).reshape(X_test.shape).astype(np.float32)
+
+    # model
+    model = build_model((X_train.shape[1], X_train.shape[2]), n_classes=len(classes))
+
+    # class weights
+    counts = Counter(y_train); total = max(1, sum(counts.values()))
+    class_weight = {i: total/(len(counts)*counts[i]) for i in counts} if counts else None
+
+    cbs = [
+        callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, verbose=1),
+        callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
+        callbacks.ModelCheckpoint("cnn_gru_best.keras", monitor="val_loss", save_best_only=True),
+    ]
+
+    val_split = 0.1 if len(X_train) > 50 and len(np.unique(y_train))>1 else 0.0
+    model.fit(X_train, y_train,
+              validation_split=val_split,
+              epochs=args.epochs, batch_size=args.batch,
+              class_weight=class_weight, verbose=2,
+              callbacks=cbs if val_split>0 else None)
+
+    # test
+    if len(X_test)==0:
+        print("\n== Test skipped: no test samples ==")
+        return
+
+    y_prob = model.predict(X_test, batch_size=args.batch)
+    y_pred = y_prob.argmax(axis=1)
+    acc = accuracy_score(y_test, y_pred)
+    macro_f1 = f1_score(y_test, y_pred, average="macro")
+    print("\n== Test (≈20%, pure windows, stacked) ==")
+    print(f"Accuracy: {acc:.4f} | Macro-F1: {macro_f1:.4f}")
+
+    all_labels = list(range(len(classes)))
+    print("\nClassification report (all classes):")
+    print(classification_report(y_test, y_pred, labels=all_labels,
+                                target_names=classes, digits=4, zero_division=0))
+    print("Confusion matrix (all classes order):")
+    print(confusion_matrix(y_test, y_pred, labels=all_labels))
+
+    # save artifacts
+    try:
+        import joblib
+        joblib.dump(scaler, "scaler.joblib")
+        pd.Series(classes).to_csv("classes.csv", index=False, header=False)
+        print("[info] Saved cnn_gru_best.keras, scaler.joblib, classes.csv")
+    except Exception as e:
+        print(f"[warn] Could not save scaler/classes: {e}")
+
+if __name__ == "__main__":
+    main()

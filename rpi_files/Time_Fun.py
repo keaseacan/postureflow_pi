@@ -27,7 +27,7 @@ def read_rtc()->list:
       td = _.read_i2c_block_data(rtc_addr, 0x00, 7)
       print("ds3231 rtc successfuly read")
       return td
-  except:
+  except Exception:
     print("ds3231 rtc not read")
   
 def write_to_pi()->bool:

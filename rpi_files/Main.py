@@ -1,5 +1,4 @@
 import Time_Fun as ttf
-import BT_Fun as btf
 
 # ---- Functions ----
 def BT_setup():

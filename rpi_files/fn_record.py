@@ -2,10 +2,14 @@
 import alsaaudio
 import numpy as np, queue, threading, time, signal
 
-# ---- Requested stream settings (you can change these) ----
-REQ_RATE = 8000          # 8 kHz requested; use 16000 if your model expects 16 kHz
+# ---- Requested capture & processing settings ----
+REQ_RATE = 8000          # request this from ALSA
 REQ_CH   = 2             # ReSpeaker 2 mics
 PERIOD   = 256           # DMA/ALSA period in frames
+
+# We'll always process at this rate/ch, resampling/downmixing if needed.
+PROC_RATE = 8000
+PROC_CH   = 1            # mono for downstream DSP
 
 # Prefer software SRC (plughw/sysdefault) at your requested rate, then raw 48k
 DEVICE_CANDIDATES = [
@@ -25,13 +29,35 @@ def process_features(features):           return None
 def handle_result(result, t_start_sec):   pass
 
 # ---- Shared config/state ----
-blocks = queue.Queue(maxsize=32)
+blocks = queue.Queue(maxsize=32)  # int16 capture blocks
 stop_evt = threading.Event()
-cfg = {'rate': None, 'ch': None, 'device': None}
+cfg = {'rate_in': None, 'ch_in': None, 'device': None}
 
 def _int16_to_float32(x):
     # Convert interleaved int16 [-32768,32767] to float32 [-1,1]
     return (x.astype(np.float32) / 32768.0).clip(-1.0, 1.0)
+
+def _downmix_to_mono(f32_2d):
+    """[N, ch] -> [N] mono by simple average."""
+    if f32_2d.ndim == 2 and f32_2d.shape[1] > 1:
+        return f32_2d.mean(axis=1)
+    elif f32_2d.ndim == 2 and f32_2d.shape[1] == 1:
+        return f32_2d[:, 0]
+    elif f32_2d.ndim == 1:
+        return f32_2d
+    else:
+        raise ValueError("Unexpected audio shape")
+
+def _resample_linear_1d(x, in_sr, out_sr):
+    """Cheap linear resampler good enough for 48k->8k telemetry."""
+    if in_sr == out_sr or len(x) == 0:
+        return x
+    n_out = int(round(len(x) * (out_sr / float(in_sr))))
+    if n_out <= 1:
+        return np.zeros((0,), dtype=x.dtype)
+    t_in  = np.linspace(0.0, 1.0, num=len(x), endpoint=False, dtype=np.float32)
+    t_out = np.linspace(0.0, 1.0, num=n_out,   endpoint=False, dtype=np.float32)
+    return np.interp(t_out, t_in, x).astype(np.float32, copy=False)
 
 def open_pcm_with_fallback():
     """Try several device/rate combos; return (pcm, rate, ch, dev)."""
@@ -87,53 +113,60 @@ class Framer:
 
 def capture_thread():
     """ALSA non-blocking capture; pushes NumPy int16 blocks shaped [nframes, ch]."""
-    pcm, rate, ch, dev = open_pcm_with_fallback()
-    cfg['rate'], cfg['ch'], cfg['device'] = rate, ch, dev
+    pcm, rate_in, ch_in, dev = open_pcm_with_fallback()
+    cfg['rate_in'], cfg['ch_in'], cfg['device'] = rate_in, ch_in, dev
 
-    nap = (PERIOD / rate) / 4.0
+    nap = (PERIOD / rate_in) / 4.0
     samples_captured = 0
     t0 = time.monotonic()
 
     while not stop_evt.is_set():
         try:
             nframes, data = pcm.read()  # (frames, bytes); frames==0 if not ready yet
-        except alsaaudio.ALSAAudioError as e:
-            # Handle EPIPE/etc. by brief nap and continue
+        except alsaaudio.ALSAAudioError:
             time.sleep(nap)
             continue
 
         if nframes > 0 and data:
             block_i16 = np.frombuffer(data, dtype=np.int16)
             # Defensive reshape (drop trailing partial samples if any)
-            n_samp = (block_i16.size // ch) * ch
+            n_samp = (block_i16.size // ch_in) * ch_in
             if n_samp != block_i16.size:
                 block_i16 = block_i16[:n_samp]
-            block_i16 = block_i16.reshape(-1, ch)
+            if n_samp == 0:
+                continue
+            block_i16 = block_i16.reshape(-1, ch_in)
 
-            # Timestamp (approx): start time of this block relative to t0
-            t_block_start = (samples_captured / rate)
-            samples_captured += nframes
+            # Timestamp: start time of this block relative to t0
+            t_block_start = (samples_captured / rate_in)
+            # Advance by the frames we actually kept
+            samples_captured += block_i16.shape[0]
 
             try:
                 blocks.put_nowait((block_i16, t0 + t_block_start))
             except queue.Full:
-                _ = blocks.get_nowait()
+                # Drop oldest block to make room (bounded latency)
+                try:
+                    _ = blocks.get_nowait()
+                except queue.Empty:
+                    pass
                 blocks.put_nowait((block_i16, t0 + t_block_start))
         else:
             time.sleep(nap)
 
 def processing_thread():
-    """Consumes capture blocks, frames them, then calls your functions."""
+    """Consumes capture blocks, resamples/downmixes, frames, then calls your functions."""
     # Wait until capture thread sets actual cfg
-    while not stop_evt.is_set() and (cfg['rate'] is None or cfg['ch'] is None):
+    while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
         time.sleep(0.01)
     if stop_evt.is_set():
         return
 
-    rate = cfg['rate']; ch = cfg['ch']
-    frame_len = int(rate * FRAME_MS / 1000)
-    hop_len   = int(rate * HOP_MS   / 1000)
-    framer = Framer(frame_len, hop_len, ch, rate)
+    rate_in = cfg['rate_in']
+    # We will frame at PROC_RATE / PROC_CH regardless of input
+    frame_len = int(PROC_RATE * FRAME_MS / 1000)
+    hop_len   = int(PROC_RATE * HOP_MS   / 1000)
+    framer = Framer(frame_len, hop_len, PROC_CH, PROC_RATE)
 
     while not stop_evt.is_set():
         try:
@@ -141,20 +174,35 @@ def processing_thread():
         except queue.Empty:
             continue
 
-        # Convert to float32 for DSP
+        # Convert to float32 for DSP, shape [N, ch_in]
         block_f32 = _int16_to_float32(block_i16)
 
-        # OPTION 2: process in standard analysis frames (25 ms / 10 ms hop)
-        for frame_f32, t_frame_start in framer.push(block_f32, t_block_start):
-            cleaned = clean_block(frame_f32, rate)
-            feats   = extract_features(cleaned, rate)
+        # Downmix to mono -> [N]
+        mono = _downmix_to_mono(block_f32)
+
+        # Resample if needed to PROC_RATE -> [N_proc]
+        mono_proc = _resample_linear_1d(mono, rate_in, PROC_RATE)
+
+        # Ensure shape [N_proc, 1] for the framer
+        if mono_proc.size == 0:
+            continue
+        mono_proc_2d = mono_proc.reshape(-1, 1)
+
+        # Frame and process
+        for frame_f32, t_frame_start in framer.push(mono_proc_2d, t_block_start):
+            cleaned = clean_block(frame_f32, PROC_RATE)
+            feats   = extract_features(cleaned, PROC_RATE)
             result  = process_features(feats)
             handle_result(result, t_frame_start)
 
 def main():
     def on_sigint(sig, frm):
         stop_evt.set()
-    signal.signal(signal.SIGINT, on_sigint)
+    try:
+        signal.signal(signal.SIGINT, on_sigint)
+        signal.signal(signal.SIGTERM, on_sigint)
+    except Exception:
+        pass
 
     t_cap = threading.Thread(target=capture_thread, daemon=True)
     t_proc = threading.Thread(target=processing_thread, daemon=True)

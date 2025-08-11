@@ -1,4 +1,4 @@
-import Time_Fun as ttf
+import fn_time as ttf
 
 # ---- Functions ----
 def BT_setup():

@@ -195,6 +195,10 @@ def main():
         print(f"[warn] Permutation importance failed: {e}")
         
     print("[info] IMF weightages saved to list:", out_list)
+    print("Label mapping:")
+    for idx, name in enumerate(le.classes_):
+        print(f"{idx} -> {name}")
+
 
     # Quick outcome summary
     unique_pred, counts_pred = np.unique(y_pred, return_counts=True)

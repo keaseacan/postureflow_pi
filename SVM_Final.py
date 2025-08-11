@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# SVM_final_weights.py — SVM trainer + ALWAYS-on IMF weightages (Python 3.9+)
+# SVM_final_weights_with_bias.py — SVM trainer + ALWAYS-on IMF weightages + bias (intercept) dump
 
 import argparse, re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from itertools import combinations
 
 from joblib import dump
 from sklearn.model_selection import train_test_split
@@ -19,8 +20,8 @@ print("[running]", __file__)
 
 # ----------------- helpers -----------------
 def parse_args():
-    p = argparse.ArgumentParser(description="SVM posture classifier + IMF weightages.")
-    p.add_argument("--excel", default="breathing_features3_3.xlsx", help="Excel file")
+    p = argparse.ArgumentParser(description="SVM posture classifier + IMF weightages + bias.")
+    p.add_argument("--excel", default="breathing_features3_6.xlsx", help="Excel file")
     p.add_argument("--test", type=float, default=0.20, help="Test fraction (0,1)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--no-person", action="store_true", help="Exclude Person column if present")
@@ -43,7 +44,8 @@ def find_label_col(df):
 
 def find_imf_cols(df):
     # Accept IMF_1, IMF1, IMF 1, imf_1, etc.; require 1..9
-    pat = re.compile(r"^imf[\s_]?(\d+)$", re.IGNORECASE)
+    import re as _re
+    pat = _re.compile(r"^imf[\s_]?(\d+)$", _re.IGNORECASE)
     matches = []
     for c in df.columns:
         m = pat.match(str(c).strip())
@@ -142,6 +144,25 @@ def main():
     print("Classification Report:")
     print(classification_report(y_test, y_pred, target_names=le.classes_, digits=4))
 
+    # ---------- SVM internals: bias (intercept) & support vectors ----------
+    svc = svm.named_steps["svc"]
+    cls_names = list(le.classes_)
+    print("\n-- SVM internals (RBF kernel) --")
+    print(f"kernel=rbf  C={svc.C}  gamma={svc.gamma}  class_weight={svc.class_weight}")
+    print(f"classes: {cls_names}")
+    # number of support vectors per class is aligned with svc.classes_
+    print(f"n_support_ (per class): {svc.n_support_.tolist()}")
+    out_list = []
+    if len(cls_names) == 2:
+        # Binary: one intercept
+        print(f"bias/intercept_: {svc.intercept_[0]:.6f}")
+        out_list.append(f"{svc.intercept_[0]:.6g}")
+    else:
+        # Multiclass (OvO): one intercept per class pair in lexicographic order
+        print("bias/intercepts per class pair:")
+        for (a, b), bval in zip(combinations(cls_names, 2), svc.intercept_):
+            print(f"  ({a} vs {b}): {bval:.6f}")
+
     # ---------- IMF weightages (permutation importance) ----------
     try:
         perm = permutation_importance(
@@ -160,18 +181,24 @@ def main():
 
         names = [f"IMF_{i}" for i in range(1, k+1)]
         print("\n== IMF weightages (permutation importance, macro-F1) — IMF order ==")
-        for name, w in zip(names, weights):   # <-- no sorting, preserves IMF_1..IMF_9
+        for name, w in zip(names, weights):   # preserves IMF_1..IMF_9 order
             print(f"{name}: {w*100:5.1f}%")
+            out_list.append(f"{w:.6g}")
 
         if args.save_weights:
             out = pd.DataFrame({"feature": names, "weight": weights})
             out["weight_percent"] = out["weight"] * 100.0
-            # out = out.sort_values("feature")  # (optional) force IMF_1..IMF_9 order
             out.to_csv(args.save_weights, index=False)
             print(f"[info] Saved IMF weightages to {args.save_weights}")
-
+    
     except Exception as e:
         print(f"[warn] Permutation importance failed: {e}")
+        
+    print("[info] IMF weightages saved to list:", out_list)
+    print("Label mapping:")
+    for idx, name in enumerate(le.classes_):
+        print(f"{idx} -> {name}")
+
 
     # Quick outcome summary
     unique_pred, counts_pred = np.unique(y_pred, return_counts=True)
@@ -180,7 +207,7 @@ def main():
         print(f"{lab:>9}: {cnt}")
     print(f"\n[summary] Test Acc={acc:.3f}")
 
-    # Plot (after weights so it never blocks weight printing)
+    # Plot (after weights so it never blocks printing)
     if not args.no_plot:
         cm = confusion_matrix(y_test, y_pred)
         plt.figure(figsize=(6, 4))

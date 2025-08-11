@@ -1,7 +1,6 @@
 import subprocess
 from datetime import datetime
 import smbus2 as sm
-from BT_Fun import cts_char, ble_mac
 
 # definitions
 i2c_port: int = 1

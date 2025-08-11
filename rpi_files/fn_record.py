@@ -1,5 +1,6 @@
 # pip install pyalsaaudio numpy
-import alsaaudio, numpy as np, queue, threading, time, signal
+import alsaaudio
+import numpy as np, queue, threading, time, signal
 
 # ---- Configure your device/stream ----
 DEVICE = 'hw:1,0'   # ReSpeaker card:device (use 'plughw:1,0' if ALSA resampling is OK)

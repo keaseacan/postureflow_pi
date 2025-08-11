@@ -1,4 +1,5 @@
-import Time_Fun
+import Time_Fun as ttf
+import BT_Fun as btf
 
 # ---- Functions ----
 def BT_setup():
@@ -13,8 +14,8 @@ def IMU_setup():
 def setup():
     """Runs once at the start."""
     print("Setup: initializing hardware...")
-    # Example: open I2C, configure pins, etc.
-    # i2c = smbus2.SMBus(1)
+    ttf.set_time()
+
 
 def loop():
     """Runs repeatedly forever."""

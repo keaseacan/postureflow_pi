@@ -1,34 +1,73 @@
-import asyncio, subprocess
+import subprocess
 from datetime import datetime
-from bleak import BleakClient, BleakScanner
-import smbus2
+from bleak import BleakClient
+import smbus2 as sm
+from BT_Fun import cts_char, ble_mac
 
-def bcd_to_dec(b): return (b >> 4) * 10 + (b & 0x0F)
-s, m, h, wd, d, mo, y = bus.read_i2c_block_data(ADDR, 0x00, 7)
-dt = datetime(2000 + bcd_to_dec(y),
-              bcd_to_dec(mo & 0x1F),
-              bcd_to_dec(d),
-              bcd_to_dec(h & 0x3F),
-              bcd_to_dec(m),
-              bcd_to_dec(s & 0x7F))
-subprocess.run(["sudo", "date", "-s", dt.strftime("%Y-%m-%d %H:%M:%S")])
-print("System time set to:", dt)
+# definitions
+i2c_port: int = 1
+rtc_addr: hex = 0x68
 
-def dec_to_bcd(d): return ((d // 10) << 4) | (d % 10)
-now = get_time_from_ble()
-data = [
-    dec_to_bcd(now.second),
-    dec_to_bcd(now.minute),
-    dec_to_bcd(now.hour),
-    dec_to_bcd((now.isoweekday()) % 7 or 7),  # 1=Mon..7=Sun
-    dec_to_bcd(now.day),
-    dec_to_bcd(now.month),
-    dec_to_bcd(now.year - 2000)
-]
-bus.write_i2c_block_data(ADDR, 0x00, data)
+# helper functions
+def bcd_to_int(b): return (b >> 4) * 10 + (b & 0x0F)
+def int_to_bcd(d): return ((d // 10) << 4) | (d % 10)
+
+# for checking on rpi init
+def setup_i2c()->bool:
+  try:
+    with sm.SMBus(i2c_port) as _:  # run for side effects
+      return True
+  except Exception:
+    return False
+  
+def read_rtc()->list:
+    with sm.SMBus(i2c_port) as _:
+      return _.read_i2c_block_data(rtc_addr, 0x00, 7)
+  
+def write_to_pi()->bool:
+  try:
+    s, m, h, dw, d, mo, y = read_rtc()
+    dt: datetime = datetime(2000 + bcd_to_int(y),
+                bcd_to_int(mo & 0x1F),
+                bcd_to_int(d),
+                bcd_to_int(h & 0x3F),
+                bcd_to_int(m),
+                bcd_to_int(s & 0x7F))
+    subprocess.run(["sudo", "date", "-s", dt.strftime("%Y-%m-%d %H:%M:%S")])
+    return True
+  except Exception:
+    return False
+
+"""
+def write_to_rtc()->bool:
+  try:
+    now: datetime = read_ble_time()
+    data = [
+      int_to_bcd(now.second),
+      int_to_bcd(now.minute),
+      int_to_bcd(now.hour),
+      int_to_bcd((now.isoweekday()) % 7 or 7),  # 1=Mon..7=Sun
+      int_to_bcd(now.day),
+      int_to_bcd(now.month),
+      int_to_bcd(now.year - 2000)
+    ]
+    try:
+      with sm.SMBus(i2c_port) as _:
+      _.write_i2c_block_data(rtc_addr, 0x00, data)
+    except Exception:
+      return False 
+  except Exception:
+    return False
+
+async def read_ble_time()->datetime:
+  async with BleakClient(ble_mac) as client:
+    if not client.is_connected:
+      raise RuntimeError("Failed to connect to BLE device.")
+  data = await client.read_gatt_char(cts_char)
+  return parse_cts(bytes(data))
 
 
-def parse_cts(payload: bytes) -> datetime:
+def parse_cts(payload: bytes)->datetime:
     # CTS format (Little-Endian):
     # year u16, month u8, day u8, hour u8, min u8, sec u8, dow u8, frac256 u8, adj_reason u8
     year = int.from_bytes(payload[0:2], "little")
@@ -38,22 +77,4 @@ def parse_cts(payload: bytes) -> datetime:
     minute = payload[5]
     second = payload[6]
     return datetime(year, month, day, hour, minute, second)
-
-async def get_time_from_ble() -> datetime:
-    async with BleakClient(BLE_MAC) as client:
-        if not client.is_connected:
-            raise RuntimeError("Failed to connect to BLE device.")
-        data = await client.read_gatt_char(CTS_CHAR)
-        return parse_cts(bytes(data))
-    
-def take_time():
-    bus = smbus2.SMBus(1)
-    ADDR = 0x68
-    bcd_to_dec()
-    bus.close()
-
-def set_time():
-    bus = smbus2.SMBus(1)
-    ADDR = 0x68
-    dec_to_bcd()
-    bus.close()
+"""

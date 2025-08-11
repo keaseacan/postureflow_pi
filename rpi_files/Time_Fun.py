@@ -1,6 +1,5 @@
 import subprocess
 from datetime import datetime
-from bleak import BleakClient
 import smbus2 as sm
 from BT_Fun import cts_char, ble_mac
 

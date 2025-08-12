@@ -65,6 +65,14 @@ def write_to_rtc()->bool:
   except Exception:
     return False
 
+async def read_ble_time()->datetime:
+  async with BleakClient(ble_mac) as client:
+    if not client.is_connected:
+      raise RuntimeError("Failed to connect to BLE device.")
+  data = await client.read_gatt_char(cts_char)
+  return parse_cts(bytes(data))
+
+
 def parse_cts(payload: bytes)->datetime:
     # CTS format (Little-Endian):
     # year u16, month u8, day u8, hour u8, min u8, sec u8, dow u8, frac256 u8, adj_reason u8

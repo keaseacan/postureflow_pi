@@ -1,13 +1,5 @@
 import fn_time as ttf
 
-# ---- Functions ----
-def BT_setup():
-	"""Sets up Bluetooth connection."""
-	print("Setting up Bluetooth...")
-
-def IMU_setup():
-	"""Sets up IMU sensor."""
-	print("Setting up IMU...")
 
 # ---- Setup ----
 def pi_setup():

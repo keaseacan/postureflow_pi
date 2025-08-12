@@ -95,9 +95,6 @@ def main():
 		t_proc.join(timeout=1.0)
 		# NOTE: You can also close ALSA PCM explicitly in capture_thread on exit.
 
-if __name__ == "__main__":
-	main()
-
 # used to init audio device
 # returned pcm overwrites global cfg
 def open_pcm_with_fallback():
@@ -212,3 +209,5 @@ def processing_thread():
 			result  = process_features(feats)                     # your model
 			handle_result(result, t_frame_start)                  # log/emit
 
+if __name__ == "__main__":
+	main()

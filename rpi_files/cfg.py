@@ -1,3 +1,10 @@
+# dependencies
+import alsaaudio
+
+
+"""
+AUDIO RECORDING
+"""
 # ---- Requested capture & processing settings ----
 REQ_RATE = 16000          # ask ALSA for 16 kHz if possible (ALSA can resample)
 REQ_CH   = 2              # request 2 channels (ReSpeaker 2-mic HAT)

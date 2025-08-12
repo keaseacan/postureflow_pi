@@ -2,11 +2,11 @@
 from fn_record_helpers import _resample_linear, _bytes_to_float32
 from fn_record_debug import _fmt_name, Diagnostics
 from fn_record_buffer import Framer
-from fn_record_cfg import REQ_CH, REQ_RATE, PERIOD
-from fn_record_cfg import PROC_RATE
-from fn_record_cfg import FORMAT_CANDIDATES, DEVICE_CANDIDATES
-from fn_record_cfg import FRAME_MS, HOP_MS
-from fn_record_cfg import RUN_DIAGNOSTICS
+from rpi_files.cfg import REQ_CH, REQ_RATE, PERIOD
+from rpi_files.cfg import PROC_RATE
+from rpi_files.cfg import FORMAT_CANDIDATES, DEVICE_CANDIDATES
+from rpi_files.cfg import FRAME_MS, HOP_MS
+from rpi_files.cfg import RUN_DIAGNOSTICS
 
 # pip install pyalsaaudio numpy
 import alsaaudio

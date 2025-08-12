@@ -77,7 +77,9 @@ def main():
 	try:
 		signal.signal(signal.SIGINT, on_sigint)
 		signal.signal(signal.SIGTERM, on_sigint)
+		if RUN_DIAGNOSTICS: print("signal work")
 	except Exception:
+		if RUN_DIAGNOSTICS: print("signal not work")
 		pass
 
 	t_cap = threading.Thread(target=capture_thread, daemon=True)

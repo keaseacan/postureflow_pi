@@ -107,7 +107,7 @@ class RealTimeBreathDetector:
                 continue
 
             # Reuse your per-segment gates
-            seg = P.silence_trim_guard(seg, top_db=10)
+            seg = P.silence_trim_guard(seg, self.sr, top_db=10)
             if seg.size == 0:
                 continue
 

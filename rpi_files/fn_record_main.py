@@ -137,93 +137,52 @@ def capture_thread():
 				blocks.put_nowait((block_f32, t0 + t_block_start))
 		else:
 			time.sleep(nap)
-	"""
-	def processing_thread():
-	Consumes capture blocks from the queue (float32, stereo), resamples both channels
-	to PROC_RATE, then uses the Framer to emit 25 ms / 10 ms frames.
-	For each frame (shape [frame_len, 2]), call the user hooks in order.
-	# Wait for capture config
-	while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
-		time.sleep(0.01)
-	if stop_evt.is_set():
-		return
 
-	rate_in = cfg['rate_in']
-	ch_proc = cfg['ch_in']  # keep the same channel count as the input (stereo)
-
-	# Frame sizes in samples at processing rate
-	frame_len = int(PROC_RATE * FRAME_MS / 1000)  # 25 ms @ 16 kHz → 400
-	hop_len   = int(PROC_RATE * HOP_MS   / 1000)  # 10 ms @ 16 kHz → 160
-	framer = Framer(frame_len, hop_len, ch_proc, PROC_RATE)
-
-	# Diagnostics setup
-	diag = Diagnostics(PROC_RATE, ch_proc, hop_len) if RUN_DIAGNOSTICS else None
-	if RUN_DIAGNOSTICS:
-		diag.on_open(cfg)
-
-	while not stop_evt.is_set():
-		try:
-			block_f32, t_block_start = blocks.get(timeout=0.5)  # [N, ch_proc], abs time
-		except queue.Empty:
-			continue
-
-		# Resample both channels to fixed processing rate → [N_proc, ch_proc]
-		block_proc = _resample_linear(block_f32, rate_in, PROC_RATE)
-		if block_proc.size == 0:
-			continue
-
-		# Frame & process
-		for frame_f32, t_frame_start in framer.push(block_proc, t_block_start):
-			if RUN_DIAGNOSTICS:
-				diag.check_frame(frame_f32, t_frame_start)
-
-			cleaned = clean_block(frame_f32, PROC_RATE)           # e.g., HPF per channel
-			feats   = extract_features(cleaned, PROC_RATE)        # stereo-aware features
-			result  = process_features(feats)                     # your model
-			handle_result(result, t_frame_start)                  # log/emit
-"""
-
-	def processing_thread():
-		# Wait for capture config
+def processing_thread():
+		# Wait for capture config from capture_thread
 		while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
 				time.sleep(0.01)
 		if stop_evt.is_set():
 				return
 
 		rate_in = cfg['rate_in']
-		ch_proc = cfg['ch_in']  # keep stereo for capture; we downmix in detector
+		ch_proc = cfg['ch_in']  # keep stereo for capture; downmix happens in detector if needed
 
+		# Frame sizes in samples at processing rate
 		frame_len = int(PROC_RATE * FRAME_MS / 1000)
 		hop_len   = int(PROC_RATE * HOP_MS   / 1000)
 		framer = Framer(frame_len, hop_len, ch_proc, PROC_RATE)
 
+		# Diagnostics
 		diag = Diagnostics(PROC_RATE, ch_proc, hop_len) if RUN_DIAGNOSTICS else None
 		if RUN_DIAGNOSTICS:
 				diag.on_open(cfg)
 
-		# Instantiate the detector and tell it how to report results
+		# Callback for breath segments
 		def on_segment(res):
-			# res = {"EnvProfile", "Duration_ms", "IMF":[...], "t_abs_start": seconds}
-			# Replace this with your logger / model / BLE emit, etc.
-			print(f"[BREATH] t={res['t_abs_start']:.3f}s, dur={res['Duration_ms']:.1f} ms, env={res['EnvProfile']}, IMF1={res['IMF'][0]:.4f}")
+				# res: {"EnvProfile", "Duration_ms", "IMF":[...], "t_abs_start": seconds}
+				print(f"[BREATH] t={res['t_abs_start']:.3f}s, "
+							f"dur={res['Duration_ms']:.1f} ms, env={res['EnvProfile']}, "
+							f"IMF1={res['IMF'][0]:.4f}")
 
-			detector = RealTimeBreathDetector(PROC_RATE, on_segment=on_segment)
-			while not stop_evt.is_set():
+		# Instantiate the detector ONCE (not inside the callback)
+		detector = RealTimeBreathDetector(PROC_RATE, on_segment=on_segment)
+
+		# Main processing loop
+		while not stop_evt.is_set():
 				try:
-					block_f32, t_block_start = blocks.get(timeout=0.5)
+						block_f32, t_block_start = blocks.get(timeout=0.5)
 				except queue.Empty:
-					continue
+						continue
 
 				block_proc = _resample_linear(block_f32, rate_in, PROC_RATE)
 				if block_proc.size == 0:
-					continue
+						continue
 
 				for frame_f32, t_frame_start in framer.push(block_proc, t_block_start):
-					if RUN_DIAGNOSTICS:
-						diag.check_frame(frame_f32, t_frame_start)
-
-					# Feed the detector; no need to go through the placeholder hook chain
-					detector.push(frame_f32, t_frame_start)
-
+						if RUN_DIAGNOSTICS:
+								diag.check_frame(frame_f32, t_frame_start)
+						detector.push(frame_f32, t_frame_start)
+	
 if __name__ == "__main__":
 	main()

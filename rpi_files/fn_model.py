@@ -12,4 +12,4 @@ def snap3(x: float) -> int:
 
 def class_num(num):
     class_map = {0: "Bending", 1: "Sitting", 2: "Standing"}
-    return class_map.get(snap3(num), "Unknown")
+    return class_map.get(class_pos(snap3(num), Weightages), "Unknown")

@@ -2,11 +2,12 @@
 from fn_record_helpers import _resample_linear, _bytes_to_float32
 from fn_record_debug import _fmt_name, Diagnostics
 from fn_record_buffer import Framer
-from rpi_files.cfg import REQ_CH, REQ_RATE, PERIOD
-from rpi_files.cfg import PROC_RATE
-from rpi_files.cfg import FORMAT_CANDIDATES, DEVICE_CANDIDATES
-from rpi_files.cfg import FRAME_MS, HOP_MS
-from rpi_files.cfg import RUN_DIAGNOSTICS
+from fn_process_breath import RealTimeBreathDetector
+from cfg import REQ_CH, REQ_RATE, PERIOD
+from cfg import PROC_RATE
+from cfg import FORMAT_CANDIDATES, DEVICE_CANDIDATES
+from cfg import FRAME_MS, HOP_MS
+from cfg import RUN_DIAGNOSTICS
 
 # pip install pyalsaaudio numpy
 import alsaaudio
@@ -136,13 +137,11 @@ def capture_thread():
 				blocks.put_nowait((block_f32, t0 + t_block_start))
 		else:
 			time.sleep(nap)
-
-def processing_thread():
 	"""
+	def processing_thread():
 	Consumes capture blocks from the queue (float32, stereo), resamples both channels
 	to PROC_RATE, then uses the Framer to emit 25 ms / 10 ms frames.
 	For each frame (shape [frame_len, 2]), call the user hooks in order.
-	"""
 	# Wait for capture config
 	while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
 		time.sleep(0.01)
@@ -182,6 +181,49 @@ def processing_thread():
 			feats   = extract_features(cleaned, PROC_RATE)        # stereo-aware features
 			result  = process_features(feats)                     # your model
 			handle_result(result, t_frame_start)                  # log/emit
+"""
+
+	def processing_thread():
+		# Wait for capture config
+		while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
+				time.sleep(0.01)
+		if stop_evt.is_set():
+				return
+
+		rate_in = cfg['rate_in']
+		ch_proc = cfg['ch_in']  # keep stereo for capture; we downmix in detector
+
+		frame_len = int(PROC_RATE * FRAME_MS / 1000)
+		hop_len   = int(PROC_RATE * HOP_MS   / 1000)
+		framer = Framer(frame_len, hop_len, ch_proc, PROC_RATE)
+
+		diag = Diagnostics(PROC_RATE, ch_proc, hop_len) if RUN_DIAGNOSTICS else None
+		if RUN_DIAGNOSTICS:
+				diag.on_open(cfg)
+
+		# Instantiate the detector and tell it how to report results
+		def on_segment(res):
+			# res = {"EnvProfile", "Duration_ms", "IMF":[...], "t_abs_start": seconds}
+			# Replace this with your logger / model / BLE emit, etc.
+			print(f"[BREATH] t={res['t_abs_start']:.3f}s, dur={res['Duration_ms']:.1f} ms, env={res['EnvProfile']}, IMF1={res['IMF'][0]:.4f}")
+
+			detector = RealTimeBreathDetector(PROC_RATE, on_segment=on_segment)
+			while not stop_evt.is_set():
+				try:
+					block_f32, t_block_start = blocks.get(timeout=0.5)
+				except queue.Empty:
+					continue
+
+				block_proc = _resample_linear(block_f32, rate_in, PROC_RATE)
+				if block_proc.size == 0:
+					continue
+
+				for frame_f32, t_frame_start in framer.push(block_proc, t_block_start):
+					if RUN_DIAGNOSTICS:
+						diag.check_frame(frame_f32, t_frame_start)
+
+					# Feed the detector; no need to go through the placeholder hook chain
+					detector.push(frame_f32, t_frame_start)
 
 if __name__ == "__main__":
 	main()

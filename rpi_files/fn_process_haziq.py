@@ -234,8 +234,7 @@ def process_file(path):
         ber_band     = QUIET_BER_BAND
         ber_min      = QUIET_BER_MIN
 
-    print(f"\n▶ Env='{env}' → band={LOWER}-{UPPER}th, smooth={smooth_win}, gap_tol={gap_tol}, "
-          f"RMS%={rms_pct}, ZCR%={zcr_pct}, BER≥{ber_min} ({ber_band[0]}–{ber_band[1]} Hz)")
+    print(f"\n▶ Env='{env}' → band={LOWER}-{UPPER}th, smooth={smooth_win}, gap_tol={gap_tol}, "f"RMS%={rms_pct}, ZCR%={zcr_pct}, BER≥{ber_min} ({ber_band[0]}–{ber_band[1]} Hz)")
 
     # 2) candidate frames from smoothed RMS
     frames, thr_low, thr_high, hop_len = detect_breath_frames(y, sr, LOWER, UPPER, smooth_win)

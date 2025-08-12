@@ -1,7 +1,6 @@
 # dependencies
 import alsaaudio
 
-
 """
 AUDIO RECORDING
 """

@@ -21,7 +21,7 @@ print("[running]", __file__)
 # ----------------- helpers -----------------
 def parse_args():
     p = argparse.ArgumentParser(description="SVM posture classifier + IMF weightages + bias.")
-    p.add_argument("--excel", default="breathing_features3_6.xlsx", help="Excel file")
+    p.add_argument("--excel", default="BURNBABYBURNbreathing2.xlsx", help="Excel file")
     p.add_argument("--test", type=float, default=0.20, help="Test fraction (0,1)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--no-person", action="store_true", help="Exclude Person column if present")
@@ -156,13 +156,13 @@ def main():
     if len(cls_names) == 2:
         # Binary: one intercept
         print(f"bias/intercept_: {svc.intercept_[0]:.6f}")
-        out_list.append(f"{svc.intercept_[0]:.6g}")
+        
     else:
         # Multiclass (OvO): one intercept per class pair in lexicographic order
         print("bias/intercepts per class pair:")
         for (a, b), bval in zip(combinations(cls_names, 2), svc.intercept_):
             print(f"  ({a} vs {b}): {bval:.6f}")
-
+    out_list.append(f"{svc.intercept_[0]:.6g}")
     # ---------- IMF weightages (permutation importance) ----------
     try:
         perm = permutation_importance(

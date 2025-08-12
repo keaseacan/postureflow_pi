@@ -1,4 +1,12 @@
+# dependencies
 import numpy as np
+import queue
+import threading
+
+# ---- Shared config/state ----
+# Queue carries float32 blocks (resolution-agnostic) + absolute (monotonic-based) timestamp.
+blocks = queue.Queue(maxsize=32)
+stop_evt = threading.Event()
 
 class Framer:
   """

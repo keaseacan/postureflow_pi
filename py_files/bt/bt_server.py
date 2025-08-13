@@ -15,7 +15,7 @@ Phone app disconnect:
   - Auto resume pipelines
 """
 
-import json, queue, threading, time, signal
+import json, queue, threading, time, signal, sys  # <-- added sys
 from typing import Callable, Optional
 import dbus, dbus.exceptions, dbus.mainloop.glib, dbus.service
 from gi.repository import GLib
@@ -79,6 +79,16 @@ def ble_send(obj: dict):
     """Queue a JSON line for TX notifications."""
     _tx_queue.put((json.dumps(obj) + "\n").encode("utf-8"))
 
+# ---------- Rolling status line ----------
+_spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # fallback: "|/-\\" if your terminal lacks unicode
+
+def _fmt_dur(sec: float) -> str:
+    if not sec or sec < 0: return "--:--"
+    sec = int(sec)
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
 # ---------- DBus scaffolding ----------
 class InvalidArgsException(dbus.exceptions.DBusException):
     _dbus_error_name = 'org.freedesktop.DBus.Error.InvalidArgs'
@@ -141,8 +151,8 @@ class NusRxCharacteristic(Characteristic):
             for line in s.splitlines():
                 line=line.strip()
                 if not line: continue
-                print('[BLE][RX]', json.loads(line))
-        except Exception as e: print('[BLE][RX] parse-error:', e)
+                print('\n[BLE][RX]', json.loads(line))
+        except Exception as e: print('\n[BLE][RX] parse-error:', e)
 
 class NusTxCharacteristic(Characteristic):
     def __init__(self, bus, index, service):
@@ -152,12 +162,12 @@ class NusTxCharacteristic(Characteristic):
     def StartNotify(self):
         super().StartNotify()
         try: self.on_start_notify and self.on_start_notify()
-        except Exception as e: print('[BLE] on_start_notify error:', e)
+        except Exception as e: print('\n[BLE] on_start_notify error:', e)
     @dbus.service.method('org.bluez.GattCharacteristic1')
     def StopNotify(self):
         super().StopNotify()
         try: self.on_stop_notify and self.on_stop_notify()
-        except Exception as e: print('[BLE] on_stop_notify error:', e)
+        except Exception as e: print('\n[BLE] on_stop_notify error:', e)
 
 class NusService(Service):
     def __init__(self, bus, index):
@@ -186,9 +196,9 @@ class Advertisement(dbus.service.Object):
             'Type': self.ad_type,
             'LocalName': DEVICE_NAME,
             'IncludeTxPower': dbus.Boolean(True),
-            # Optional extras you can add:
-            # 'Appearance': dbus.UInt16(0),   # generic
-            # 'Duration': dbus.UInt16(0),     # 0 = no auto-timeout (BlueZ-specific)
+            # Optional extras:
+            # 'Appearance': dbus.UInt16(0),
+            # 'Duration': dbus.UInt16(0),
             # 'Timeout': dbus.UInt16(0),
         }
         if ADVERTISE_SERVICE_UUIDS and self.service_uuids:
@@ -217,9 +227,9 @@ def disconnect_all_connected(bus):
         if dev and bool(dev.get('Connected', False)):
             try:
                 dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), DEVICE_IFACE).Disconnect()
-                print(f'[BLE] Disconnect requested: {path}')
+                print('\n[BLE] Disconnect requested:', path)
             except Exception as e:
-                print('[BLE] Disconnect error:', e)
+                print('\n[BLE] Disconnect error:', e)
 
 # ---------- Main ----------
 def main():
@@ -235,28 +245,40 @@ def main():
     ad_mgr = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, adapter_path), LE_ADVERTISING_MANAGER_IFACE)
     adv = Advertisement(bus, 0, 'peripheral', [NUS_SERVICE_UUID])
 
-    service_mgr.RegisterApplication(app.get_path(), {}, reply_handler=lambda: print('[BLE] GATT app registered'),
-                                    error_handler=lambda e: print('[BLE] GATT app register error:', e))
+    service_mgr.RegisterApplication(app.get_path(), {}, reply_handler=lambda: print('\n[BLE] GATT app registered'),
+                                    error_handler=lambda e: print('\n[BLE] GATT app register error:', e))
 
     # State
-    state = {'adv_registered': False, 'client_connected': False}
+    state = {
+        'adv_registered': False,
+        'client_connected': False,
+        't_adv_start': None,
+        't_conn_start': None,
+        'spin_idx': 0,
+    }
 
     def _register_adv():
         if state['adv_registered']: return False
-        def ok(): print('[BLE] Advertising'); return False
-        def err(e): print('[BLE] Adv register error:', e); return False
+        def ok():
+            state['adv_registered'] = True
+            state['t_adv_start'] = time.time()
+            print('\n[BLE] Advertising started')
+            return False
+        def err(e):
+            print('\n[BLE] Adv register error:', e)
+            return False
         ad_mgr.RegisterAdvertisement(adv.get_path(), {}, reply_handler=ok, error_handler=err)
-        state['adv_registered'] = True
         return False
 
     def _unregister_adv():
         if not state['adv_registered']: return False
         try:
             ad_mgr.UnregisterAdvertisement(adv.get_path())
-            print('[BLE] Advertising stopped')
+            print('\n[BLE] Advertising stopped')
         except Exception as e:
-            print('[BLE] Adv unregister error:', e)
+            print('\n[BLE] Adv unregister error:', e)
         state['adv_registered'] = False
+        state['t_adv_start'] = None
         return False
 
     def enter_pairing_mode():
@@ -295,20 +317,24 @@ def main():
 
         button.when_held = on_held
         button.when_released = on_released
-        print(f"[BLE] Button on GPIO{GPIO_BUTTON_PIN}: short=pair, hold(≥{BUTTON_HOLD_SEC}s)=disconnect")
+        print(f"\n[BLE] Button on GPIO{GPIO_BUTTON_PIN}: short=pair, hold(≥{BUTTON_HOLD_SEC}s)=disconnect")
     except Exception as e:
-        print(f"[BLE] gpiozero unavailable ({e}); you can still pair via manual call to enter_pairing_mode()")
+        print(f"\n[BLE] gpiozero unavailable ({e}); you can still pair via manual call to enter_pairing_mode()")
         # Optional: auto-start advertising if no button available
         GLib.idle_add(_register_adv)
 
     # Connection hooks via notifications
     def on_client_subscribed():
         state['client_connected'] = True
+        state['t_conn_start'] = time.time()
+        print('\n[BLE] Client subscribed (connected)')
         GLib.idle_add(_unregister_adv)     # stop advertising once connected
         # services remain paused while connected
 
     def on_client_unsubscribed():
         state['client_connected'] = False
+        state['t_conn_start'] = None
+        print('\n[BLE] Client unsubscribed (disconnected)')
         exit_pairing_mode()                 # resume after disconnect
 
     nus.tx.on_start_notify = on_client_subscribed
@@ -324,8 +350,34 @@ def main():
                     nus.tx.send_notification(payload[i:i+max_len])
                     time.sleep(0.005)
             except Exception as e:
-                print('[BLE][TX] error:', e); time.sleep(0.5)
+                print('\n[BLE][TX] error:', e); time.sleep(0.5)
     threading.Thread(target=tx_worker, daemon=True).start()
+
+    # Rolling status ticker
+    def _status_tick():
+        state['spin_idx'] = (state['spin_idx'] + 1) % len(_spinner_frames)
+        sp = _spinner_frames[state['spin_idx']]
+        now = time.time()
+
+        adv = state['adv_registered']
+        conn = state['client_connected']
+
+        adv_dur  = _fmt_dur((now - state['t_adv_start']) if adv and state['t_adv_start'] else 0)
+        conn_dur = _fmt_dur((now - state['t_conn_start']) if conn and state['t_conn_start'] else 0)
+
+        line = (
+            f"\r[BLE]{sp} "
+            f"adv={'ON ' if adv else 'OFF'} {adv_dur} | "
+            f"conn={'YES' if conn else 'NO '} {conn_dur}    "
+        )
+        try:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        except Exception:
+            pass
+        return True
+
+    GLib.timeout_add(500, _status_tick)
 
     # Optional heartbeat
     if DEMO_HEARTBEAT:
@@ -336,7 +388,7 @@ def main():
 
     # Clean shutdown
     def _handle_sig(*_):
-        print('[BLE] Shutting down...')
+        print('\n[BLE] Shutting down...')
         try: _unregister_adv()
         except Exception: pass
         try: MAIN_LOOP.quit()
@@ -347,7 +399,7 @@ def main():
             signal.signal(signal.SIGINT, _handle_sig)
             signal.signal(signal.SIGTERM, _handle_sig)
     except Exception as _e:
-        print('[BLE] Signal setup skipped:', _e)
+        print('\n[BLE] Signal setup skipped:', _e)
 
     global MAIN_LOOP
     MAIN_LOOP = GLib.MainLoop()
@@ -355,3 +407,6 @@ def main():
     finally:
         try: _unregister_adv()
         except Exception: pass
+
+if __name__ == "__main__":
+    main()

@@ -7,7 +7,7 @@ PERIOD = int(REQ_RATE * 0.016) # 16 ms period
 PROC_RATE = 16000         # downstream DSP sample rate (fixed)
 
 # ---- Analysis frame settings ----
-FRAME_MS = 20             # analysis window length (e.g., 25 ms for speech)
+FRAME_MS = 25             # analysis window length (e.g., 25 ms for speech)
 HOP_MS   = 10             # hop between frames (10 ms → 60% overlap at 25 ms)
 
 # ---- Diagnostics (enable/disable) ----

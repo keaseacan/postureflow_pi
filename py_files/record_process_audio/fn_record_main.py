@@ -7,12 +7,13 @@ import queue
 import threading
 import time
 import signal
+from typing import Optional
 
 # Public handles for host app
-_feature_q: queue.Queue | None = None
-_threads = {}
+_feature_q: Optional[queue.Queue] = None
+_threads: dict[str, threading.Thread] = {}
 
-def start_audio_pipeline(out_queue: queue.Queue | None = None) -> queue.Queue:
+def start_audio_pipeline(out_queue: Optional[queue.Queue] = None) -> queue.Queue:
 	"""
 	Start capture + processing threads. Returns the queue that receives
 	result dicts from RealTimeBreathDetector.on_segment, e.g.:

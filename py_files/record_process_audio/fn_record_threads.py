@@ -13,6 +13,7 @@ from py_files.fn_cfg import RUN_RECORD_DIAGNOSTICS, RUN_TRANSFORM_DIAGNOSTICS
 import alsaaudio
 import queue
 import time
+from typing import Optional
 
 def capture_thread():
     """
@@ -59,7 +60,7 @@ def capture_thread():
         else:
             time.sleep(nap)
 
-def processing_thread(emit_queue: queue.Queue | None = None):
+def processing_thread(emit_queue: Optional[queue.Queue] = None):
     # Wait for capture config from capture_thread
     while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):
         time.sleep(0.01)

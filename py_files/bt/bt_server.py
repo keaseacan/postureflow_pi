@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
 """
 BLE Peripheral (NUS) with "press to pair, hold to disconnect" on GPIO17.
-
-Short press:
-  - Pause your pipelines (pause_cb)
-  - Start advertising until the phone connects (no timeout)
-
-Hold (>=1.2s):
-  - If connected: disconnect the phone
-  - Else if advertising: stop advertising
-  - In both cases, resume pipelines (resume_cb) once fully out of BLE mode
-
-Phone app disconnect:
-  - Auto resume pipelines
 """
-
-import json, queue, threading, time, signal, sys  # <-- added sys
+import json, queue, threading, time, signal, sys
 from typing import Callable, Optional
 import dbus, dbus.exceptions, dbus.mainloop.glib, dbus.service
 from gi.repository import GLib
@@ -23,10 +10,10 @@ from gi.repository import GLib
 # ---------- Config ----------
 DEVICE_NAME = "PosturePi"
 GPIO_BUTTON_PIN = 17      # BCM (pin 11)
-BUTTON_HOLD_SEC = 1.2     # "hold" threshold
+BUTTON_HOLD_SEC = 1.2
 
-DEMO_HEARTBEAT = False
-DEMO_HEARTBEAT_SEC = 5
+DEMO_HEARTBEAT = True           # <<< enable heartbeat
+DEMO_HEARTBEAT_SEC = 2          # <<< heartbeat interval
 
 # NUS UUIDs
 NUS_SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
@@ -34,7 +21,7 @@ NUS_RX_UUID      = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
 NUS_TX_UUID      = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
 
 # --- ADV privacy toggle ---
-ADVERTISE_SERVICE_UUIDS = True  # True = include UUIDs in ADV; False = omit (stealth scan-by-name)
+ADVERTISE_SERVICE_UUIDS = True
 
 # ---------- BlueZ constants ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'
@@ -46,7 +33,6 @@ DEVICE_IFACE = 'org.bluez.Device1'
 
 MAIN_LOOP = None
 _tx_queue = queue.Queue()
-
 
 # service pause/resume hooks
 _pause_cb: Optional[Callable[[], None]] = None
@@ -75,12 +61,23 @@ def _resume_services_async():
     if _resume_cb:
         threading.Thread(target=_safe_call, args=("resume", _resume_cb), daemon=True).start()
 
+# --------- Convenience sends ----------
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
 def ble_send(obj: dict):
     """Queue a JSON line for TX notifications."""
-    _tx_queue.put((json.dumps(obj) + "\n").encode("utf-8"))
+    _tx_queue.put((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+
+def ble_send_label(label: str, ts_ms: Optional[int]=None, **extra):
+    """Shorthand to send a {ts_ms, label, ...} JSON line."""
+    payload = {"ts_ms": ts_ms if ts_ms is not None else _now_ms(), "label": label}
+    if extra:
+        payload.update(extra)
+    ble_send(payload)
 
 # ---------- Rolling status line ----------
-_spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # fallback: "|/-\\" if your terminal lacks unicode
+_spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 def _fmt_dur(sec: float) -> str:
     if not sec or sec < 0: return "--:--"
@@ -143,7 +140,9 @@ class Characteristic(dbus.service.Object):
     def PropertiesChanged(self, interface, changed, invalidated): pass
 
 class NusRxCharacteristic(Characteristic):
-    def __init__(self, bus, index, service): super().__init__(bus, index, NUS_RX_UUID, ['write','write-without-response'], service)
+    def __init__(self, bus, index, service):
+        super().__init__(bus, index, NUS_RX_UUID, ['write','write-without-response'], service)
+        self.on_line = None   # <<< callback for parsed JSON/cmds
     @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='aya{sv}')
     def WriteValue(self, value, options):
         try:
@@ -151,7 +150,13 @@ class NusRxCharacteristic(Characteristic):
             for line in s.splitlines():
                 line=line.strip()
                 if not line: continue
-                print('\n[BLE][RX]', json.loads(line))
+                try:
+                    obj = json.loads(line)
+                    print('\n[BLE][RX]', obj)
+                    if isinstance(obj, dict) and self.on_line:
+                        self.on_line(obj)
+                except Exception:
+                    print('\n[BLE][RX] text:', line)
         except Exception as e: print('\n[BLE][RX] parse-error:', e)
 
 class NusTxCharacteristic(Characteristic):
@@ -177,39 +182,24 @@ class NusService(Service):
 
 class Advertisement(dbus.service.Object):
     PATH_BASE = '/app/advertisement'
-
     def __init__(self, bus, index, ad_type, service_uuids):
-        self.path = self.PATH_BASE + str(index)
-        self.ad_type = ad_type
-        self.service_uuids = service_uuids
+        self.path = self.PATH_BASE + str(index); self.ad_type = ad_type; self.service_uuids = service_uuids
         super().__init__(bus, self.path)
-
-    def get_path(self):
-        return dbus.ObjectPath(self.path)
-
+    def get_path(self): return dbus.ObjectPath(self.path)
     @dbus.service.method('org.freedesktop.DBus.Properties', out_signature='a{sv}')
     def GetAll(self, interface):
         if interface != 'org.bluez.LEAdvertisement1':
             raise InvalidArgsException()
-
         props = {
             'Type': self.ad_type,
             'LocalName': DEVICE_NAME,
             'IncludeTxPower': dbus.Boolean(True),
-            # Optional extras:
-            # 'Appearance': dbus.UInt16(0),
-            # 'Duration': dbus.UInt16(0),
-            # 'Timeout': dbus.UInt16(0),
         }
         if ADVERTISE_SERVICE_UUIDS and self.service_uuids:
             props['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
-
         return props
-
     @dbus.service.method('org.bluez.LEAdvertisement1')
-    def Release(self):
-        pass
-
+    def Release(self): pass
 
 # ---------- Adapter & device helpers ----------
 def find_adapter(bus):
@@ -220,7 +210,6 @@ def find_adapter(bus):
     raise RuntimeError('Bluetooth adapter not found')
 
 def disconnect_all_connected(bus):
-    """Attempt to disconnect any connected device(s)."""
     om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
     for path, ifaces in om.GetManagedObjects().items():
         dev = ifaces.get(DEVICE_IFACE)
@@ -255,6 +244,7 @@ def main():
         't_adv_start': None,
         't_conn_start': None,
         'spin_idx': 0,
+        'hb_src': None,   # <<< GLib source id for heartbeat
     }
 
     def _register_adv():
@@ -265,8 +255,7 @@ def main():
             print('\n[BLE] Advertising started')
             return False
         def err(e):
-            print('\n[BLE] Adv register error:', e)
-            return False
+            print('\n[BLE] Adv register error:', e); return False
         ad_mgr.RegisterAdvertisement(adv.get_path(), {}, reply_handler=ok, error_handler=err)
         return False
 
@@ -282,69 +271,95 @@ def main():
         return False
 
     def enter_pairing_mode():
-        """Pause pipelines and start advertising indefinitely."""
         _pause_services_async()
         GLib.idle_add(_register_adv)
 
     def exit_pairing_mode():
-        """Stop advertising and resume pipelines if not connected."""
         GLib.idle_add(_unregister_adv)
         if not state['client_connected']:
             _resume_services_async()
 
-    # Button: short press to pair, hold to disconnect/cancel
+    # Button handlers
     try:
         from gpiozero import Button
         button = Button(GPIO_BUTTON_PIN, pull_up=True, bounce_time=0.05, hold_time=BUTTON_HOLD_SEC)
         _held = {'v': False}
-
         def on_held():
             _held['v'] = True
-            # If connected -> disconnect central; else cancel advertising.
             GLib.idle_add(lambda: (disconnect_all_connected(bus) if state['client_connected'] else _unregister_adv()))
-            # Resume services after the above completes
             GLib.timeout_add(200, lambda: (_resume_services_async() or False))
-
         def on_released():
-            # Short press if the hold callback didn't fire
             if _held['v']:
-                _held['v'] = False
-                return
-            # If already advertising or connected, ignore
+                _held['v'] = False; return
             if state['adv_registered'] or state['client_connected']:
                 return
             enter_pairing_mode()
-
         button.when_held = on_held
         button.when_released = on_released
         print(f"\n[BLE] Button on GPIO{GPIO_BUTTON_PIN}: short=pair, hold(≥{BUTTON_HOLD_SEC}s)=disconnect")
     except Exception as e:
         print(f"\n[BLE] gpiozero unavailable ({e}); you can still pair via manual call to enter_pairing_mode()")
-        # Optional: auto-start advertising if no button available
         GLib.idle_add(_register_adv)
 
+    # ---- RX command handler (from phone) <<< ----
+    def on_rx_cmd(obj: dict):
+        cmd = str(obj.get('cmd', '')).lower()
+        if cmd == 'ping':
+            ble_send_label('pong')
+        elif cmd == 'echo':
+            msg = obj.get('msg', '')
+            ble_send_label('echo', msg=msg)
+        elif cmd == 'hb' and 'enable' in obj:
+            enable = bool(obj['enable'])
+            if enable and state['hb_src'] is None:
+                state['hb_src'] = GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat_tick)
+                ble_send_label('hb_on')
+            elif not enable and state['hb_src'] is not None:
+                GLib.source_remove(state['hb_src']); state['hb_src'] = None
+                ble_send_label('hb_off')
+        # add more commands here as needed
+
+    nus.rx.on_line = on_rx_cmd
+
     # Connection hooks via notifications
+    def start_heartbeat():
+        if DEMO_HEARTBEAT and state['hb_src'] is None:
+            state['hb_src'] = GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat_tick)
+
+    def stop_heartbeat():
+        if state['hb_src'] is not None:
+            GLib.source_remove(state['hb_src']); state['hb_src'] = None
+
+    def heartbeat_tick():
+        # runs only while subscribed
+        ble_send_label('hb', demo=True)
+        return True  # keep timer
+
     def on_client_subscribed():
         state['client_connected'] = True
         state['t_conn_start'] = time.time()
         print('\n[BLE] Client subscribed (connected)')
-        GLib.idle_add(_unregister_adv)     # stop advertising once connected
-        # services remain paused while connected
+        GLib.idle_add(_unregister_adv)  # stop advertising once connected
+        # send immediate hello + start heartbeat
+        ble_send_label('hello')
+        start_heartbeat()
 
     def on_client_unsubscribed():
         state['client_connected'] = False
         state['t_conn_start'] = None
         print('\n[BLE] Client unsubscribed (disconnected)')
-        exit_pairing_mode()                 # resume after disconnect
+        stop_heartbeat()
+        exit_pairing_mode()
 
     nus.tx.on_start_notify = on_client_subscribed
     nus.tx.on_stop_notify  = on_client_unsubscribed
 
-    # TX worker
+    # TX worker (chunk & notify)
     def tx_worker():
         while True:
             try:
                 payload = _tx_queue.get()
+                # keep under typical ~180 bytes/app-layer chunk
                 max_len = 180
                 for i in range(0, len(payload), max_len):
                     nus.tx.send_notification(payload[i:i+max_len])
@@ -358,33 +373,14 @@ def main():
         state['spin_idx'] = (state['spin_idx'] + 1) % len(_spinner_frames)
         sp = _spinner_frames[state['spin_idx']]
         now = time.time()
-
-        adv = state['adv_registered']
-        conn = state['client_connected']
-
+        adv = state['adv_registered']; conn = state['client_connected']
         adv_dur  = _fmt_dur((now - state['t_adv_start']) if adv and state['t_adv_start'] else 0)
         conn_dur = _fmt_dur((now - state['t_conn_start']) if conn and state['t_conn_start'] else 0)
-
-        line = (
-            f"\r[BLE]{sp} "
-            f"adv={'ON ' if adv else 'OFF'} {adv_dur} | "
-            f"conn={'YES' if conn else 'NO '} {conn_dur}    "
-        )
-        try:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-        except Exception:
-            pass
+        line = f"\r[BLE]{sp} adv={'ON ' if adv else 'OFF'} {adv_dur} | conn={'YES' if conn else 'NO '} {conn_dur}    "
+        try: sys.stdout.write(line); sys.stdout.flush()
+        except Exception: pass
         return True
-
     GLib.timeout_add(500, _status_tick)
-
-    # Optional heartbeat
-    if DEMO_HEARTBEAT:
-        def heartbeat():
-            ble_send({"ts_ms": int(time.time()*1000), "class_idx": 2, "conf": 0.99, "demo": True})
-            return True
-        GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat)
 
     # Clean shutdown
     def _handle_sig(*_):

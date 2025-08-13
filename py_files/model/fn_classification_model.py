@@ -1,7 +1,7 @@
 import math
-weights_str = ['-0.27712', '0.608056', '0.0290904', '0.102516', '0.0343235', '0.21263', '0', '0.0133844', '0', '0']
+weights_str = ['-0.307493', '0.212682', '0.266026', '0.100825', '0.0400341', '0.0983247', '0.155449', '0.0346157', '0.0540047', '0.0380388']
 weights = [float(x) for x in weights_str]
-class_map = {0: "Bending", 1: "Sitting", 2: "Standing"}
+class_map = {0: "Sitting", 1: "Standing"}
 
 def class_score(imfs, weights=weights):
 	"""Linear score = bias + sum(w_i * imf_i)."""

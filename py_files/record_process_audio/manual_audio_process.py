@@ -1,4 +1,3 @@
-# dependencies
 import os
 import shutil
 import numpy as np
@@ -30,7 +29,7 @@ FRAME_MS = 20
 HOP_MS   = 10
 
 # Breath duration guardrails (seconds)
-BREATH_MIN_SEC = 0.25
+BREATH_MIN_SEC = 0.35
 BREATH_MAX_SEC = 1.50
 
 # Smoothed RMS for candidate detection
@@ -65,8 +64,13 @@ HHT_SR_TARGET = 16000        # resample segments for stable EMD
 HHT_MIN_SEC   = 0.25         # pad segments shorter than this for EMD
 HHT_IMFS      = 9            # always create 9 features (pad with 0 if fewer returned)
 
-# -------------------- NumPy/SciPy replacements for librosa --------------------
+# ========= Silent/unworn detector thresholds =========
+ABS_RMS_P95_SILENT      = 0.0025   # if p95 RMS below this, file is very quiet
+ABS_ACTIVE_THRESH       = 0.0020   # "activity" RMS threshold
+MIN_ACTIVE_FRAMES_RATIO = 0.01     # at least 1% frames must be "active"
+# =====================================================
 
+# -------------------- NumPy/SciPy replacements --------------------
 def load_audio(filename):
     """Return mono float32 y, sr."""
     y, sr = sf.read(filename, always_2d=False)
@@ -113,7 +117,6 @@ def frame_zcr_np(y, sr, frame_len=None, hop_len=None):
     F = frame_view(y, frame_len, hop_len)
     if F.size == 0:
         return np.array([], dtype=np.float32)
-    # Count sign changes; treat exact zeros as non-crossing
     prod = F[:, 1:] * F[:, :-1]
     crossings = (prod < 0).sum(axis=1)
     zcr = crossings / (F.shape[1] - 1)
@@ -136,10 +139,30 @@ def resample_to(y, sr, sr_target):
     return signal.resample(y.astype(np.float64, copy=False), n_out)
 
 # -------------------- Pipeline helpers --------------------
-
 def high_pass_filter(y, sr, cutoff=HPF_CUTOFF_HZ):
     sos = signal.butter(10, cutoff, 'hp', fs=sr, output='sos')
     return signal.sosfilt(sos, y)
+
+# ---------- Silent/unworn quick check (NO librosa) ----------
+def is_silent_or_unworn(y, sr):
+    """
+    Fast pre-check to detect an unworn device or an empty/near-silent recording.
+    Uses absolute thresholds to avoid 'adapting' to silence.
+    """
+    frame_len, hop_len = frame_params(sr)
+    rms = frame_rms_np(y, sr, frame_len, hop_len)
+    if rms.size == 0:
+        return True
+
+    p95 = float(np.percentile(rms, 95))
+    active_ratio = float(np.mean(rms > ABS_ACTIVE_THRESH))
+
+    # Always print this diagnostic so you can see why a file is skipped
+    print(f"[SilentCheck] p95_RMS={p95:.6f}, active_ratio={active_ratio*100:.2f}% "
+          f"(thr_p95<{ABS_RMS_P95_SILENT}, thr_act>{ABS_ACTIVE_THRESH})")
+
+    # Both: very low top-end RMS AND too few active frames -> silent/unworn
+    return (p95 < ABS_RMS_P95_SILENT) and (active_ratio < MIN_ACTIVE_FRAMES_RATIO)
 
 # ------------- Environment heuristic -------------
 def classify_environment(y, sr):
@@ -217,7 +240,6 @@ def silence_trim_guard(segment, sr, top_db=10):
     Trim leading/trailing low-energy parts based on an RMS envelope within `top_db` of peak.
     Revert if trimming leaves <20% of original (guard against over-trim).
     """
-    # Envelope over ~20 ms with 10 ms hop
     f_len = max(1, int(0.020 * sr))
     h_len = max(1, int(0.010 * sr))
     env = frame_rms_np(segment, sr, f_len, h_len)
@@ -251,7 +273,6 @@ def adaptive_zcr_rms(y, sr, thr_low, thr_high, zcr_pct, rms_pct):
     if len(energy) == 0:
         return 0.35, 0.0002
 
-    # light smoothing for energy
     if len(energy) >= 9:
         energy_s = np.convolve(energy, np.ones(9)/9, mode="same")
     else:
@@ -310,6 +331,12 @@ def process_file(path):
     y, sr = load_audio(path)
     y = high_pass_filter(y, sr)
 
+    # ---------- NEW: silent/unworn early-exit (no export) ----------
+    if is_silent_or_unworn(y, sr):
+        print(f"🚫 File looks silent/unworn: {os.path.basename(path)} — skipping detection.")
+        return np.empty((0, HHT_IMFS), dtype=np.float32), [], "silent"
+    # ---------------------------------------------------------------
+
     # 1) environment profile
     env = classify_environment(y, sr)
     if env == "noisy":
@@ -345,11 +372,12 @@ def process_file(path):
     # 5) extract / gate / save
     seg_wavs = []
     durations_ms = []
+
+    # Lazy folder creation: only if we actually keep segments
     save_dir = os.path.join(SEG_ROOT, os.path.splitext(os.path.basename(path))[0])
     if CLEAR_OLD_SEGMENTS and os.path.isdir(save_dir):
         shutil.rmtree(save_dir)
-    if SAVE_SEGMENTS:
-        os.makedirs(save_dir, exist_ok=True)
+    folder_ready = False  # create only when needed
 
     kept_idx = 0
     removed_ber = removed_rms = removed_zcr = 0
@@ -392,13 +420,20 @@ def process_file(path):
         kept_idx += 1
         seg_wavs.append(seg.astype(np.float32, copy=False))
         durations_ms.append((len(seg) / sr) * 1000.0)
+
         if SAVE_SEGMENTS:
+            if not folder_ready:
+                os.makedirs(save_dir, exist_ok=True)
+                folder_ready = True
             outp = os.path.join(save_dir, f"breath_{kept_idx}.wav")
             sf.write(outp, seg, sr)
 
     print(f"[Counts] BER={removed_ber} | RMS={removed_rms} | ZCR={removed_zcr} | kept={kept_idx}")
 
-    # 6) HHT features
+    # 6) HHT features — only if we actually kept segments
+    if kept_idx == 0:
+        return np.empty((0, HHT_IMFS), dtype=np.float32), [], env
+
     feats = extract_hht_features(seg_wavs, sr, sr_target=HHT_SR_TARGET,
                                  min_sec=HHT_MIN_SEC, max_imf=HHT_IMFS)
     return feats, durations_ms, env
@@ -413,6 +448,12 @@ def main():
         print(f"\n🎧 Processing {fn} ...")
         try:
             feats, durs, env = process_file(fp)
+
+            # NEW: Skip export entirely if silent/unworn OR 0 segments kept
+            if feats.size == 0:
+                print(f"ℹ️ Skipping export for {fn} (no segments).")
+                continue
+
             for i, fv in enumerate(feats):
                 row = {
                     "File": fn,
@@ -422,6 +463,7 @@ def main():
                     **{f"IMF_{k+1}": float(fv[k]) for k in range(HHT_IMFS)}
                 }
                 rows.append(row)
+
         except PermissionError as e:
             print(f"⚠️ Permission error (is {OUTPUT_XLSX} open?): {e}")
         except Exception as e:

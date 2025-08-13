@@ -146,7 +146,7 @@ class NusRxCharacteristic(Characteristic):
 
 class NusTxCharacteristic(Characteristic):
     def __init__(self, bus, index, service):
-        super().__init__(bus, index, NUS_TX_UUID, ['encrypt-notify'], service)
+        super().__init__(bus, index, NUS_TX_UUID, ['notify'], service)
         self.on_start_notify=None; self.on_stop_notify=None
     @dbus.service.method('org.bluez.GattCharacteristic1')
     def StartNotify(self):

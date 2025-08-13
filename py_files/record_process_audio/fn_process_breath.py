@@ -22,10 +22,16 @@ class RealTimeBreathDetector:
 		# Bookkeeping to avoid duplicate emits
 		self.last_emitted_sample = 0  # sample idx within current buf of last emitted end
 
-		# Tunables
-		self.max_buffer_sec = 10.0    # keep at most ~20 s of audio
-		self.tail_guard_sec = 0.05    # don’t finalize a segment that ends within 150 ms of buffer tail
-		self.min_analyze_sec = 0.3    # don’t analyze until we have at least this much audio
+		# Tunables (lowered for faster cadence)
+		self.max_buffer_sec = 10.0   # keep at most ~10 s of audio
+		self.tail_guard_sec = 0.05   # don't finalize a segment within 50 ms of buffer tail
+		self.min_analyze_sec = 0.3   # don't analyze until we have at least 300 ms of audio
+
+		# Diagnostics counters (optional)
+		self._kept = 0
+		self._drop_ber = 0
+		self._drop_rms = 0
+		self._drop_zcr = 0
 
 	@staticmethod
 	def _downmix_mono(x):
@@ -82,6 +88,10 @@ class RealTimeBreathDetector:
 		frames, thr_low, thr_high, hop_len = transform.detect_breath_frames(y, self.sr, LOWER, UPPER, smooth_win)
 		seg_times = transform.frames_to_segments(frames, self.sr, hop_len, gap_tol, transform.BREATH_MIN_SEC, transform.BREATH_MAX_SEC)
 
+		buf_len_sec = self.buf.size / self.sr
+		if RUN_TRANSFORM_DIAGNOSTICS:
+			print(f"[SEG] complete={len(seg_times)} buf={buf_len_sec:.2f}s", flush=True)
+
 		if not seg_times:
 			return
 
@@ -90,9 +100,6 @@ class RealTimeBreathDetector:
 
 		# 4) finalize only completed segments (not touching the tail_guard)
 		tail_guard = self.tail_guard_sec
-		buf_len_sec = self.buf.size / self.sr
-		if RUN_TRANSFORM_DIAGNOSTICS:
-			print(f"[SEG] complete={len(seg_times)} buf={buf_len_sec:.2f}s", flush=True)
 
 		emitted_any = False
 		newest_cut_sample = self.last_emitted_sample
@@ -118,14 +125,17 @@ class RealTimeBreathDetector:
 
 			ber = transform.band_energy_ratio(seg, self.sr, ber_band[0], ber_band[1])
 			if ber < ber_min:
+				self._drop_ber += 1
 				continue
 
 			ok_rms, _ = transform.noise_gate(seg, threshold=rms_cut)
 			if not ok_rms:
+				self._drop_rms += 1
 				continue
 
 			ok_zcr, _ = transform.zcr_gate(seg, max_zcr=zcr_cut)
 			if not ok_zcr:
+				self._drop_zcr += 1
 				continue
 
 			# Normalize then extract HHT features
@@ -133,10 +143,13 @@ class RealTimeBreathDetector:
 			if peak > 0:
 				seg = seg / peak
 
-			feats = transform.extract_hht_features([seg], self.sr,
-																			sr_target=transform.HHT_SR_TARGET,
-																			min_sec=transform.HHT_MIN_SEC,
-																			max_imf=transform.HHT_IMFS)
+			feats = transform.extract_hht_features(
+				[seg], self.sr,
+				sr_target=transform.HHT_SR_TARGET,
+				min_sec=transform.HHT_MIN_SEC,
+				max_imf=transform.HHT_IMFS
+			)
+
 			# Compose result
 			result = {
 				"EnvProfile": env,
@@ -144,13 +157,16 @@ class RealTimeBreathDetector:
 				"IMF": feats[0].tolist(),
 				"t_abs_start": self.t0_abs + t0,
 			}
+
 			# Emit
 			self.on_segment(result)
 			emitted_any = True
+			self._kept += 1
 			newest_cut_sample = max(newest_cut_sample, s1)
-			if RUN_TRANSFORM_DIAGNOSTICS and (self._kept % 5 == 0):  # print every 5 keeps
+
+			if RUN_TRANSFORM_DIAGNOSTICS and self._kept > 0 and (self._kept % 5 == 0):  # print every 5 keeps
 				print(f"[KEEP] kept={self._kept} drop: BER={self._drop_ber} RMS={self._drop_rms} ZCR={self._drop_zcr}",
-							flush=True)
+					flush=True)
 
 		# 5) Drop everything up to newest emitted end so CPU stays bounded
 		if emitted_any and newest_cut_sample > 0:

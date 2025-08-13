@@ -30,21 +30,36 @@ def read_rtc()->list:
     print("ds3231 rtc not read")
 
 # fix system time based on rtc
-def write_to_pi()->bool:
-  try:
-    s, m, h, dw, d, mo, y = read_rtc()
-    dt: datetime = datetime(2000 + bcd_to_int(y),
-                bcd_to_int(mo & 0x1F),
-                bcd_to_int(d),
-                bcd_to_int(h & 0x3F),
-                bcd_to_int(m),
-                bcd_to_int(s & 0x7F))
-    subprocess.run(["sudo", "date", "-s", dt.strftime("%Y-%m-%d %H:%M:%S")])
-    print("pi clock successfully overwritten")
-    return True
-  except Exception:
-    print("pi clock not overwritten")
-    return False
+import subprocess
+from datetime import datetime
+
+def write_to_pi() -> bool:
+    try:
+        s, m, h, dw, d, mo, y = read_rtc()
+        dt = datetime(
+            2000 + bcd_to_int(y),
+            bcd_to_int(mo & 0x1F),
+            bcd_to_int(d),
+            bcd_to_int(h & 0x3F),
+            bcd_to_int(m),
+            bcd_to_int(s & 0x7F),
+        )
+        # -n: non-interactive (don’t prompt for password); check=True raises on failure
+        subprocess.run(
+            ["sudo", "-n", "date", "-s", dt.strftime("%Y-%m-%d %H:%M:%S")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("pi clock successfully overwritten")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"pi clock not overwritten (rc={e.returncode}): {e.stderr.strip()}")
+        return False
+    except Exception as e:
+        print(f"pi clock not overwritten: {e}")
+        return False
+
 
 """
 def write_to_rtc()->bool:

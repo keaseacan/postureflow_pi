@@ -13,12 +13,13 @@ from py_files.data_output.fn_data_outbox import (
 
 def pi_setup():
   print("Setup: initializing hardware...")
-  setup_i2c()
-  write_to_pi()
+  setup_i2c();                print("[OK] setup_i2c")
+  ok = write_to_pi();         print(f"[OK] write_to_pi -> {ok}")
 
-  # 1) Init durable outbox (stdout or BLE transport inside your wrapper)
-  init_outbox()
-  reset_session()  # anchors the FIRST emitted segment to 'now' (pass a ms value if you prefer)
+  init_outbox();              print("[OK] init_outbox")
+  reset_session();            print("[OK] reset_session")
+
+  feat_q = start_audio_pipeline();  print("[OK] start_audio_pipeline")
 
   # 2) Start audio pipeline (produces windows/features)
   feat_q = start_audio_pipeline()
@@ -27,6 +28,7 @@ def pi_setup():
   try:
     # preferred signature (updated classifier): start_classification(feat_q, on_emit=callable)
     start_classification(feat_q, on_emit=emit_classification)
+    print("[OK] start_classification (with on_emit)")
   except TypeError:
     # fallback if your current start_classification doesn't accept on_emit yet
     start_classification(feat_q)

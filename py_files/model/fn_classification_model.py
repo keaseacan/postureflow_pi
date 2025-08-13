@@ -23,13 +23,16 @@ def classify_imfs(imfs_row):
     imfs_row: iterable of length 9 (IMF_1..IMF_9)
     returns: (idx:int, label:str, margin:np.ndarray or float)
     """
-    _load()
-    x = np.asarray(imfs_row, dtype=np.float32).reshape(1, -1)
-    idx = int(_svm.predict(x)[0])                  # integer class id
-    label = str(_le.inverse_transform([idx])[0])   # human label
-    margin = _svm.decision_function(x)             # SVM margins
-    try:
-        margin = margin.tolist()                   # JSON-friendly
-    except Exception:
-        pass
-    return idx, label, margin
+    if len(imfs_row) == 0:
+        return None, None, None  # no input to predict
+    else:
+        _load()
+        x = np.asarray(imfs_row, dtype=np.float32).reshape(1, -1)
+        idx = int(_svm.predict(x)[0])                  # integer class id
+        label = str(_le.inverse_transform([idx])[0])   # human label
+        margin = _svm.decision_function(x)             # SVM margins
+        try:
+            margin = margin.tolist()                   # JSON-friendly
+        except Exception:
+            pass
+        return idx, label, margin

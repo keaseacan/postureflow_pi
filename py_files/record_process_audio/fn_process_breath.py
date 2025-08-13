@@ -3,6 +3,7 @@ import numpy as np
 
 # expose manual processing file functions and constants to process OTG.
 import py_files.record_process_audio.manual_audio_process as transform
+from py_files.fn_cfg import RUN_TRANSFORM_DIAGNOSTICS
 
 class RealTimeBreathDetector:
 	"""
@@ -22,9 +23,9 @@ class RealTimeBreathDetector:
 		self.last_emitted_sample = 0  # sample idx within current buf of last emitted end
 
 		# Tunables
-		self.max_buffer_sec = 20.0    # keep at most ~20 s of audio
+		self.max_buffer_sec = 10.0    # keep at most ~20 s of audio
 		self.tail_guard_sec = 0.05    # don’t finalize a segment that ends within 150 ms of buffer tail
-		self.min_analyze_sec = 1.0    # don’t analyze until we have at least this much audio
+		self.min_analyze_sec = 0.3    # don’t analyze until we have at least this much audio
 
 	@staticmethod
 	def _downmix_mono(x):
@@ -90,6 +91,8 @@ class RealTimeBreathDetector:
 		# 4) finalize only completed segments (not touching the tail_guard)
 		tail_guard = self.tail_guard_sec
 		buf_len_sec = self.buf.size / self.sr
+		if RUN_TRANSFORM_DIAGNOSTICS:
+			print(f"[SEG] complete={len(seg_times)} buf={buf_len_sec:.2f}s", flush=True)
 
 		emitted_any = False
 		newest_cut_sample = self.last_emitted_sample
@@ -145,6 +148,9 @@ class RealTimeBreathDetector:
 			self.on_segment(result)
 			emitted_any = True
 			newest_cut_sample = max(newest_cut_sample, s1)
+			if RUN_TRANSFORM_DIAGNOSTICS and (self._kept % 5 == 0):  # print every 5 keeps
+				print(f"[KEEP] kept={self._kept} drop: BER={self._drop_ber} RMS={self._drop_rms} ZCR={self._drop_zcr}",
+							flush=True)
 
 		# 5) Drop everything up to newest emitted end so CPU stays bounded
 		if emitted_any and newest_cut_sample > 0:

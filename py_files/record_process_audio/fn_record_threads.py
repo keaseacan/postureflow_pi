@@ -6,8 +6,8 @@ from py_files.record_process_audio.fn_record_debug import Diagnostics
 from py_files.record_process_audio.fn_process_breath import RealTimeBreathDetector
 
 # constants from cfg file
-from fn_cfg import PERIOD, PROC_RATE, FRAME_MS, HOP_MS
-from fn_cfg import RUN_RECORD_DIAGNOSTICS, RUN_TRANSFORM_DIAGNOSTICS
+from py_files.fn_cfg import PERIOD, PROC_RATE, FRAME_MS, HOP_MS
+from py_files.fn_cfg import RUN_RECORD_DIAGNOSTICS, RUN_TRANSFORM_DIAGNOSTICS
 
 # dependencies
 import alsaaudio

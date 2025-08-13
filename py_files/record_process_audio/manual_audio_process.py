@@ -30,7 +30,7 @@ FRAME_MS = 20
 HOP_MS   = 10
 
 # Breath duration guardrails (seconds)
-BREATH_MIN_SEC = 0.35
+BREATH_MIN_SEC = 0.10
 BREATH_MAX_SEC = 1.50
 
 # Smoothed RMS for candidate detection

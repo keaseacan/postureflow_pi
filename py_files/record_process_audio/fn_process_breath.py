@@ -23,7 +23,7 @@ class RealTimeBreathDetector:
 
 		# Tunables
 		self.max_buffer_sec = 20.0    # keep at most ~20 s of audio
-		self.tail_guard_sec = 0.15    # don’t finalize a segment that ends within 150 ms of buffer tail
+		self.tail_guard_sec = 0.05    # don’t finalize a segment that ends within 150 ms of buffer tail
 		self.min_analyze_sec = 1.0    # don’t analyze until we have at least this much audio
 
 	@staticmethod

@@ -273,7 +273,8 @@ def adaptive_zcr_rms(y, sr, thr_low, thr_high, zcr_pct, rms_pct):
     else:
         r_cut = 0.0002
 
-    print(f"[Adaptive] ZCR_cut={z_cut:.3f} (p{zcr_pct}), RMS_cut={r_cut:.6f} (p{rms_pct})")
+    if RUN_MORE_RECORD_DIAGNOSTICS:
+        print(f"[Adaptive] ZCR_cut={z_cut:.3f} (p{zcr_pct}), RMS_cut={r_cut:.6f} (p{rms_pct})")
     return z_cut, r_cut
 
 # ---------------- HHT features --------------------

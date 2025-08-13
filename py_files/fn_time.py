@@ -14,7 +14,7 @@ def int_to_bcd(d): return ((d // 10) << 4) | (d % 10)
 def setup_i2c()->bool:
   try:
     with sm.SMBus(i2c_port) as _:  # run for side effects
-      print("i2c init successful")
+      print("[I2C] i2c init successful")
       return True
   except Exception:
     return False
@@ -24,10 +24,10 @@ def read_rtc()->list:
   try:
     with sm.SMBus(i2c_port) as _:
       td = _.read_i2c_block_data(rtc_addr, 0x00, 7)
-      print("ds3231 rtc successfuly read")
+      print("[RTC] ds3231 rtc successfuly read")
       return td
   except Exception:
-    print("ds3231 rtc not read")
+    print("[RTC] ds3231 rtc not read")
 
 # fix system time based on rtc
 import subprocess
@@ -51,13 +51,13 @@ def write_to_pi() -> bool:
             capture_output=True,
             text=True,
         )
-        print("pi clock successfully overwritten")
+        print("[RTC] pi clock successfully overwritten")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"pi clock not overwritten (rc={e.returncode}): {e.stderr.strip()}")
+        print(f"[RTC] pi clock not overwritten (rc={e.returncode}): {e.stderr.strip()}")
         return False
     except Exception as e:
-        print(f"pi clock not overwritten: {e}")
+        print(f"[RTC] pi clock not overwritten: {e}")
         return False
 
 

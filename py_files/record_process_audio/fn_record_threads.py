@@ -1,9 +1,9 @@
 # functions
-from fn_record_helpers import cfg, _bytes_to_float32, _resample_poly
-from fn_record_deviceinit import open_pcm_with_fallback
-from fn_record_buffer import stop_evt, blocks, Framer
-from fn_record_debug import Diagnostics
-from fn_process_breath import RealTimeBreathDetector
+from py_files.record_process_audio.fn_record_helpers import cfg, _bytes_to_float32, _resample_poly
+from py_files.record_process_audio.fn_record_deviceinit import open_pcm_with_fallback
+from py_files.record_process_audio.fn_record_buffer import stop_evt, blocks, Framer
+from py_files.record_process_audio.fn_record_debug import Diagnostics
+from py_files.record_process_audio.fn_process_breath import RealTimeBreathDetector
 
 # constants from cfg file
 from fn_cfg import PERIOD, PROC_RATE, FRAME_MS, HOP_MS

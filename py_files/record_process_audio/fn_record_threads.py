@@ -14,6 +14,7 @@ import alsaaudio
 import queue
 import time
 from typing import Optional
+import numpy as np
 
 def capture_thread():
 	"""
@@ -59,6 +60,11 @@ def capture_thread():
 					pass
 		else:
 			time.sleep(nap)
+
+		try:
+			pcm.close()
+		except Exception:
+			pass
 
 def processing_thread(emit_queue: Optional[queue.Queue] = None):
 	# Wait for capture config from capture_thread
@@ -112,6 +118,25 @@ def processing_thread(emit_queue: Optional[queue.Queue] = None):
 			block_f32, t_block_start = blocks.get(timeout=0.5)
 		except queue.Empty:
 			continue
+
+	 # If we're behind, coalesce a small burst of blocks to catch up.
+		backlog = blocks.qsize()
+		if backlog >= 24:  # ~half a second at small periods
+			coalesced = [block_f32]
+			take = min(backlog, 8)  # cap how much we merge per cycle
+			for _ in range(take):
+				try:
+					b2, _t2 = blocks.get_nowait()
+					coalesced.append(b2)
+				except queue.Empty:
+					break
+			try:
+				block_f32 = np.vstack(coalesced)
+			except Exception:
+				# shape mismatch fallback: concatenate along time
+				block_f32 = np.concatenate(coalesced, axis=0)
+			if RUN_RECORD_DIAGNOSTICS:
+				print(f"[BACKLOG] merged {len(coalesced)} blocks; q≈{backlog}")
 
 		# resample captured audio into the processing rate
 		block_proc = _resample_poly(block_f32, rate_in, PROC_RATE)

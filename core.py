@@ -1,15 +1,15 @@
 import time
 import sys
 import signal
+import threading
 
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
 from py_files.fn_time import setup_i2c, write_to_pi
+from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox
 
-# outbox helpers (your wrapper module)
-from py_files.data_output.fn_data_outbox import (
-    init_outbox, reset_session, emit as emit_classification, close_outbox
-)
+_shutdown_once = False
+_shutdown_ev = threading.Event()
 
 def pi_setup():
   print("Setup: initializing hardware...")
@@ -42,7 +42,12 @@ def pi_setup():
   return feat_q
 
 def _graceful_shutdown(_sig=None, _frame=None):
-  """Ensure threads stop and outbox is flushed."""
+  """Ensure threads stop and outbox is flushed (idempotent)."""
+  global _shutdown_once
+  if _shutdown_once:
+    return
+  _shutdown_once = True
+  _shutdown_ev.set()
   try:
     stop_classification()
   except Exception:
@@ -55,29 +60,15 @@ def _graceful_shutdown(_sig=None, _frame=None):
     close_outbox()
   except Exception:
     pass
-  finally:
-    sys.exit(0)
 
-# Ctrl+C / SIGTERM
-signal.signal(signal.SIGINT, _graceful_shutdown)
-signal.signal(signal.SIGTERM, _graceful_shutdown)
+def _on_signal(sig, frame):
+  _shutdown_ev.set()
+  _graceful_shutdown(sig, frame)
 
-import traceback
+signal.signal(signal.SIGINT, _on_signal)
+signal.signal(signal.SIGTERM, _on_signal)
 
-if __name__ == "__main__":
-    exit_code = 0
-    try:
-        _ = pi_setup()
-        print("[MAIN] after pi_setup; entering idle loop")
-        while True:
-            time.sleep(0.5)
-    except BaseException as e:
-        exit_code = 1
-        print("[FATAL] Uncaught exception:", repr(e))
-        traceback.print_exc()
-    finally:
-        # don't hide the exception; pass the exit code through
-        try:
-            _graceful_shutdown()
-        finally:
-            sys.exit(exit_code)
+
+while not _shutdown_ev.is_set():
+  _graceful_shutdown()
+  sys.exit(0)

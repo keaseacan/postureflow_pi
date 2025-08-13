@@ -24,15 +24,15 @@ def classify_imfs(imfs_row):
     returns: (idx:int, label:str, margin:np.ndarray or float)
     """
     if len(imfs_row) == 0:
-        return None, None, None  # no input to predict
+        idx, label, margin = None, None, None
     else:
         _load()
         x = np.asarray(imfs_row, dtype=np.float32).reshape(1, -1)
         idx = int(_svm.predict(x)[0])                  # integer class id
         label = str(_le.inverse_transform([idx])[0])   # human label
         margin = _svm.decision_function(x)             # SVM margins
-        try:
-            margin = margin.tolist()                   # JSON-friendly
-        except Exception:
-            pass
-        return idx, label, margin
+    try:
+        margin = margin.tolist()                   # JSON-friendly
+    except Exception:
+        pass
+    return idx, label, margin

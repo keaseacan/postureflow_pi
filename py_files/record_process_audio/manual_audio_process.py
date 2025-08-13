@@ -65,9 +65,9 @@ HHT_MIN_SEC   = 0.25         # pad segments shorter than this for EMD
 HHT_IMFS      = 9            # always create 9 features (pad with 0 if fewer returned)
 
 # ========= Silent/unworn detector thresholds =========
-ABS_RMS_P95_SILENT      = 0.0025   # if p95 RMS below this, file is very quiet
-ABS_ACTIVE_THRESH       = 0.0020   # "activity" RMS threshold
-MIN_ACTIVE_FRAMES_RATIO = 0.01     # at least 1% frames must be "active"
+# ABS_RMS_P95_SILENT      = 0.0025   # if p95 RMS below this, file is very quiet
+# ABS_ACTIVE_THRESH       = 0.0020   # "activity" RMS threshold
+# MIN_ACTIVE_FRAMES_RATIO = 0.01     # at least 1% frames must be "active"
 # =====================================================
 
 # -------------------- NumPy/SciPy replacements --------------------
@@ -144,25 +144,25 @@ def high_pass_filter(y, sr, cutoff=HPF_CUTOFF_HZ):
     return signal.sosfilt(sos, y)
 
 # ---------- Silent/unworn quick check (NO librosa) ----------
-def is_silent_or_unworn(y, sr):
-    """
-    Fast pre-check to detect an unworn device or an empty/near-silent recording.
-    Uses absolute thresholds to avoid 'adapting' to silence.
-    """
-    frame_len, hop_len = frame_params(sr)
-    rms = frame_rms_np(y, sr, frame_len, hop_len)
-    if rms.size == 0:
-        return True
+# def is_silent_or_unworn(y, sr):
+#     """
+#     Fast pre-check to detect an unworn device or an empty/near-silent recording.
+#     Uses absolute thresholds to avoid 'adapting' to silence.
+#     """
+#     frame_len, hop_len = frame_params(sr)
+#     rms = frame_rms_np(y, sr, frame_len, hop_len)
+#     if rms.size == 0:
+#         return True
 
-    p95 = float(np.percentile(rms, 95))
-    active_ratio = float(np.mean(rms > ABS_ACTIVE_THRESH))
+#     p95 = float(np.percentile(rms, 95))
+#     active_ratio = float(np.mean(rms > ABS_ACTIVE_THRESH))
 
-    # Always print this diagnostic so you can see why a file is skipped
-    print(f"[SilentCheck] p95_RMS={p95:.6f}, active_ratio={active_ratio*100:.2f}% "
-          f"(thr_p95<{ABS_RMS_P95_SILENT}, thr_act>{ABS_ACTIVE_THRESH})")
+#     # Always print this diagnostic so you can see why a file is skipped
+#     print(f"[SilentCheck] p95_RMS={p95:.6f}, active_ratio={active_ratio*100:.2f}% "
+#           f"(thr_p95<{ABS_RMS_P95_SILENT}, thr_act>{ABS_ACTIVE_THRESH})")
 
-    # Both: very low top-end RMS AND too few active frames -> silent/unworn
-    return (p95 < ABS_RMS_P95_SILENT) and (active_ratio < MIN_ACTIVE_FRAMES_RATIO)
+#     # Both: very low top-end RMS AND too few active frames -> silent/unworn
+#     return (p95 < ABS_RMS_P95_SILENT) and (active_ratio < MIN_ACTIVE_FRAMES_RATIO)
 
 # ------------- Environment heuristic -------------
 def classify_environment(y, sr):
@@ -332,9 +332,9 @@ def process_file(path):
     y = high_pass_filter(y, sr)
 
     # ---------- NEW: silent/unworn early-exit (no export) ----------
-    if is_silent_or_unworn(y, sr):
-        print(f"🚫 File looks silent/unworn: {os.path.basename(path)} — skipping detection.")
-        return np.empty((0, HHT_IMFS), dtype=np.float32), [], "silent"
+    # if is_silent_or_unworn(y, sr):
+    #     print(f"🚫 File looks silent/unworn: {os.path.basename(path)} — skipping detection.")
+    #     return np.empty((0, HHT_IMFS), dtype=np.float32), [], "silent"
     # ---------------------------------------------------------------
 
     # 1) environment profile

@@ -33,11 +33,8 @@ def start_audio_pipeline(out_queue: Optional[queue.Queue] = None) -> queue.Queue
 def stop_audio_pipeline(timeout: float = 1.0):
 	"""Signal threads to stop and join them."""
 	stop_evt.set()
-	for t in _threads.values():
-			try:
-					t.join(timeout=timeout)
-			except RuntimeError:
-					pass
+	for t in list(_threads.values()):
+		_threads.clear()
 
 def main():
 	"""

@@ -1,5 +1,5 @@
 # ---- Requested capture & processing settings ----
-REQ_RATE = 48000        # recording sampling rate
+REQ_RATE = 16000        # recording sampling rate
 REQ_CH   = 2              # request 2 channels (ReSpeaker 2-mic HAT)
 PERIOD = int(REQ_RATE * 0.016) # 16 ms period
 

@@ -18,7 +18,8 @@ def setup_i2c()->bool:
       return True
   except Exception:
     return False
-  
+
+# take time from rtc
 def read_rtc()->list:
   try:
     with sm.SMBus(i2c_port) as _:
@@ -27,7 +28,8 @@ def read_rtc()->list:
       return td
   except Exception:
     print("ds3231 rtc not read")
-  
+
+# fix system time based on rtc
 def write_to_pi()->bool:
   try:
     s, m, h, dw, d, mo, y = read_rtc()

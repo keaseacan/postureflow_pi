@@ -34,7 +34,7 @@ def start_classification(feat_q: queue.Queue, handler=None):
       t0_mono = time.monotonic()
       while not _cls_stop_evt.is_set():
         try:
-          res = feat_q.get(timeout=0.5)  # {"IMF","Duration_ms","EnvProfile","t_abs_start"}
+          res = feat_q.get(timeout=0.5)
         except queue.Empty:
           continue
 
@@ -47,11 +47,12 @@ def start_classification(feat_q: queue.Queue, handler=None):
           "dur_ms": float(res["Duration_ms"]),
           "env": res.get("EnvProfile", "unknown"),
           "t": t0_wall + (res["t_abs_start"] - t0_mono),
-          "IMF": res["IMF"],   # keep or drop
+          "IMF": res["IMF"],   
           }
 
+        # for debugging
         if RUN_CLASSIFICATION_DIAGNOSTICS:
-          _, _, score = classify_imfs(imfs)  # only for logging
+          _, _, score = classify_imfs(imfs)
           print(f"[PRED] idx={out['idx']} {out['label']} score={score:.3f} "
           f"dur={out['dur_ms']:.0f} ms env={out['env']} t={out['t']:.3f}")
 

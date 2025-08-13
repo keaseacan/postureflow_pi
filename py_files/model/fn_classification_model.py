@@ -27,3 +27,35 @@ def classify_imfs(imfs, weights=weights):
 def classify_idx(imfs):
     s = class_score(imfs)
     return max(0, min(2, snap3(s)))
+
+print(classify_imfs([0.031455824, 0.031278663, 0.051722904, 0.140491895, 0.248087318, 0.145399309, 0.045124297, 0.019577018, 0.014576128]))
+
+import numpy as np
+from joblib import load
+
+# load your trained artifacts
+svm = load("svm_model_final.joblib")      # Pipeline(StandardScaler, SVC(kernel='rbf', ...))
+le  = load("label_encoder.joblib")        # has .classes_
+
+def predict_imfs(imfs_row):
+    """imfs_row: iterable of length 9 [IMF_1..IMF_9]"""
+    x = np.asarray(imfs_row, dtype=float).reshape(1, -1)
+
+    # prediction
+    idx = svm.predict(x)[0]               # integer class id
+    label = le.inverse_transform([idx])[0]
+
+    # SVM confidence-ish scores:
+    # - binary: decision_function -> margin (sign decides class)
+    # - multi: one-vs-one margins per pair
+    margin = svm.decision_function(x)
+
+    # if you calibrated with probability=True or CalibratedClassifierCV, you could use predict_proba
+    # probs = svm.predict_proba(x)
+
+    return int(idx), str(label), margin
+
+# example
+idx, label, margin = predict_imfs([0.031455824,0.031278663,0.051722904,0.140491895,0.248087318,0.145399309,0.045124297,0.019577018,0.014576128])
+print("idx:", idx, "label:", label, "margin:", margin)
+print("label map (idx→name):", dict(enumerate(le.classes_)))

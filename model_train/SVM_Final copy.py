@@ -21,7 +21,7 @@ print("[running]", __file__)
 # ----------------- helpers -----------------
 def parse_args():
     p = argparse.ArgumentParser(description="SVM posture classifier + IMF weightages + bias.")
-    p.add_argument("--excel", default="BURNBABYBURNbreathing2.xlsx", help="Excel file")
+    p.add_argument("--excel", default="/Users/mattchew/30.007-model/model_train/BURNBABYBURNbreathing2.xlsx", help="Excel file")
     p.add_argument("--test", type=float, default=0.20, help="Test fraction (0,1)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--no-person", action="store_true", help="Exclude Person column if present")
@@ -29,8 +29,8 @@ def parse_args():
     p.add_argument("--gamma", default="scale", help="SVM gamma ('scale' or float)")
     p.add_argument("--class-weight", choices=["none","balanced"], default="none")
     p.add_argument("--repeats", type=int, default=30, help="Permutation importance repeats")
-    p.add_argument("--save-model", default="svm_model_final.joblib")
-    p.add_argument("--save-encoder", default="label_encoder.joblib")
+    p.add_argument("--save-model", default="/Users/mattchew/30.007-model/py_files/model/svm_model_final.joblib")
+    p.add_argument("--save-encoder", default="/Users/mattchew/30.007-model/py_files/model/label_encoder.joblib")
     p.add_argument("--save-weights", default=None, help="CSV path to save IMF weights")
     p.add_argument("--no-plot", action="store_true", help="Disable confusion-matrix plot")
     p.add_argument("--debug", action="store_true", help="Print column diagnostics")
@@ -68,7 +68,7 @@ def find_person_col(df):
 # ----------------- main -----------------
 def main():
     args = parse_args()
-
+    # Always ignore person column
     # Load
     try:
         df = pd.read_excel(args.excel, engine="openpyxl")
@@ -82,20 +82,17 @@ def main():
     # Columns
     label_col = find_label_col(df)
     imf_cols  = find_imf_cols(df)
-    person_col = None if args.no_person else find_person_col(df)
+    print("Training features:", imf_cols)
+    print("Person column: None")
+    print("Label column:", label_col)
 
     if args.debug:
         print(f"[debug] label_col = {label_col}")
         print(f"[debug] imf_cols  = {imf_cols}")
-        print(f"[debug] person_col= {person_col}")
 
-    # Features
-    X_imf = df[imf_cols].to_numpy()
-    if person_col:
-        X_person = pd.get_dummies(df[person_col].astype(str), prefix="Person").to_numpy()
-        X = np.concatenate([X_imf, X_person], axis=1)
-    else:
-        X = X_imf
+    # Features: ONLY IMF 1-9
+    X = df[imf_cols].to_numpy()
+    print("SVM is training on these features (in order):", imf_cols)
 
     # Labels
     le = LabelEncoder()
@@ -174,7 +171,7 @@ def main():
         )
         # IMF are first 9 features (X = [IMF_1..IMF_9, +optional person dummies])
         imps = np.maximum(perm.importances_mean, 0.0)
-        k = min(9, imps.shape[0])
+        k = 9
         imf_imps = imps[:k]
         total = imf_imps.sum()
         weights = (imf_imps / total) if total > 0 else np.ones(k) / k
@@ -219,8 +216,9 @@ def main():
     # Save artifacts
     try:
         dump(svm, args.save_model)
+        print(f"[HERE] Saved SVM model to: {args.save_model}")
         dump(le,  args.save_encoder)
-        print(f"[info] Saved {args.save_model} and {args.save_encoder}")
+        print(f"[info] Saved label encoder to: {args.save_encoder}")
     except Exception as e:
         print(f"[warn] Could not save model/encoder: {e}")
 

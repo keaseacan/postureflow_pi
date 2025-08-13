@@ -10,6 +10,10 @@ PROC_RATE = 16000         # downstream DSP sample rate (fixed)
 FRAME_MS = 25             # analysis window length (e.g., 25 ms for speech)
 HOP_MS   = 10             # hop between frames (10 ms → 60% overlap at 25 ms)
 
+# ---- ML Files ----
+SVM_MODEL_PATH = "svm_model_final.joblib"
+LABEL_ENCODER_PATH = "label_encoder.joblib"
+
 # ---- Diagnostics (enable/disable) ----
 # Slow, takes up thread
 RUN_RECORD_DIAGNOSTICS = False 

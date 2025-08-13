@@ -53,7 +53,7 @@ def start_classification(
 
       # ---- Model inference -------------------------------------------------
       imfs = np.asarray(res["IMF"], dtype=np.float32)
-      idx = classify_idx(imfs)
+      idx, label, margin = classify_imfs(imfs)
 
       # Window start time in WALL-CLOCK (epoch) ms:
       # res["t_abs_start"] is expected to be monotonic seconds at window start.
@@ -65,7 +65,7 @@ def start_classification(
 
       out = {
         "idx": int(idx),
-        "label": class_map[idx],
+        "label": label,
         "dur_ms": float(res["Duration_ms"]),
         "env": res.get("EnvProfile", "unknown"),
         "t": t_wall,             # keep as seconds like before
@@ -75,8 +75,7 @@ def start_classification(
       # ---- Optional diagnostics -------------------------------------------
       if RUN_CLASSIFICATION_DIAGNOSTICS:
         try:
-          _, _, score = classify_imfs(imfs)
-          print(f"[PRED] idx={out['idx']} {out['label']} score={score:.3f} "
+          print(f"[PRED] idx={out['idx']} {out['label']} score={margin:.3f} "
                 f"dur={out['dur_ms']:.0f} ms env={out['env']} t={out['t']:.3f}")
         except Exception:
           pass

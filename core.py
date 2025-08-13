@@ -28,9 +28,6 @@ def pi_setup():
 
   feat_q = start_audio_pipeline();  print("[OK] start_audio_pipeline")
 
-  # 2) Start audio pipeline (produces windows/features)
-  feat_q = start_audio_pipeline()
-
   # 3) Start classifier thread and give it the emit callback
   try:
     # preferred signature (updated classifier): start_classification(feat_q, on_emit=callable)

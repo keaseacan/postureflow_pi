@@ -133,7 +133,7 @@ class Characteristic(dbus.service.Object):
     def PropertiesChanged(self, interface, changed, invalidated): pass
 
 class NusRxCharacteristic(Characteristic):
-    def __init__(self, bus, index, service): super().__init__(bus, index, NUS_RX_UUID, ['encrypt-write','write-without-response'], service)
+    def __init__(self, bus, index, service): super().__init__(bus, index, NUS_RX_UUID, ['write','write-without-response'], service)
     @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='aya{sv}')
     def WriteValue(self, value, options):
         try:

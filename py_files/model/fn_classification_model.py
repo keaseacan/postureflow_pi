@@ -15,9 +15,15 @@ def snap3(x: float) -> int:
 	"""Round to nearest int, with symmetric handling for negatives"""
 	return int(math.floor(x + 0.5)) if x >= 0 else int(math.ceil(x - 0.5))
 
+# classification model
+# outputs index
 def classify_imfs(imfs, weights=weights):
 	"""Returns (label_index, label_name, score)."""
 	score = class_score(imfs, weights)
 	idx = snap3(score)              # assumes your regression outputs ~0/1/2
 	label = class_map.get(idx, "Unknown")
 	return idx, label, score
+
+def classify_idx(imfs):
+    s = class_score(imfs)
+    return max(0, min(2, snap3(s)))

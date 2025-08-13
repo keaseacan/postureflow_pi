@@ -61,11 +61,6 @@ def capture_thread():
 		else:
 			time.sleep(nap)
 
-		try:
-			pcm.close()
-		except Exception:
-			pass
-
 def processing_thread(emit_queue: Optional[queue.Queue] = None):
 	# Wait for capture config from capture_thread
 	while not stop_evt.is_set() and (cfg['rate_in'] is None or cfg['ch_in'] is None):

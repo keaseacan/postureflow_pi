@@ -4,6 +4,7 @@ import sys
 import signal
 import threading
 import traceback
+from typing import Any, Optional, Tuple
 
 import py_files.bt.bt_server as ble
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
@@ -20,6 +21,68 @@ _shutdown_ev = threading.Event()
 _services_running = False
 _feat_q = None
 _ble_thread = None
+
+# ---------------- BLE forwarding helpers (NEW) ----------------
+def _now_ms() -> int:
+  return int(time.time() * 1000)
+
+def _normalize_emit_for_ble(ev: Any) -> Optional[Tuple[str, int, Optional[float], dict]]:
+  """
+  Return (label, ts_ms, conf_or_None, extra) or None if unusable.
+  Accepts:
+    - dict: {'label': 'Standing', 'conf': 0.92, 'ts_ms': 169..., ...}
+    - tuple/list: ('Standing', 0.92) or ('Standing',)
+    - str: 'Standing'
+  """
+  try:
+    if isinstance(ev, dict):
+      label = str(ev.get('label') or ev.get('state') or ev.get('posture') or '').strip()
+      if not label:
+        return None
+      ts_any = ev.get('ts_ms', ev.get('ts'))
+      ts_ms = int(ts_any) if ts_any is not None else _now_ms()
+      # common confidence keys
+      conf_any = ev.get('conf', ev.get('score'), ev.get('prob'))
+      conf = float(conf_any) if conf_any is not None else None
+      extra = {k: v for k, v in ev.items() if k not in ('label', 'ts_ms', 'ts', 'conf', 'score', 'prob')}
+      return (label, ts_ms, conf, extra)
+
+    if isinstance(ev, (list, tuple)) and len(ev) >= 1:
+      label = str(ev[0]).strip()
+      if not label:
+        return None
+      conf = None
+      if len(ev) >= 2:
+        try:
+          conf = float(ev[1])
+        except Exception:
+          conf = None
+      return (label, _now_ms(), conf, {})
+
+    if isinstance(ev, str):
+      label = ev.strip()
+      if not label:
+        return None
+      return (label, _now_ms(), None, {})
+
+  except Exception:
+    pass
+  return None
+
+def _forward_to_ble(ev: Any):
+  """Best-effort: never raise."""
+  try:
+    norm = _normalize_emit_for_ble(ev)
+    if not norm:
+      return
+    label, ts_ms, conf, extra = norm
+    if conf is not None:
+      extra = {**extra, "conf": conf}
+    # Single line JSON; BLE layer chunks if needed
+    ble.ble_send_label(label, ts_ms=ts_ms, **extra)
+  except Exception as e:
+    if RUN_CORE_DIAGNOSTICS:
+      print("[BLE] forward error:", repr(e))
 
 # ---------- Hardware + outbox ----------
 def pi_setup():
@@ -42,21 +105,34 @@ def pi_setup():
 
 # ---------- Pipelines start/stop (pause/resume hooks) ----------
 def start_services():
-  """Start audio + classifier and route emits to outbox."""
+  """Start audio + classifier and route emits to outbox & BLE."""
   global _services_running, _feat_q
   if _services_running:
     if RUN_CORE_DIAGNOSTICS: print("[SERV] start_services: already running")
     return
   try:
-    _feat_q = start_audio_pipeline(); 
+    _feat_q = start_audio_pipeline()
     if RUN_CORE_DIAGNOSTICS: print("[OK] start_audio_pipeline")
+
+    # ---- emit wrapper: write to outbox, also mirror to BLE ----
+    def _on_emit(ev):
+      try:
+        emit_classification(ev)    # existing behavior
+      except Exception as e:
+        if RUN_CORE_DIAGNOSTICS: print("[OUTBOX] emit error:", repr(e))
+      _forward_to_ble(ev)          # BLE mirror (best-effort)
+
     try:
-      # Preferred signature with outbox emit
-      start_classification(_feat_q, on_emit=emit_classification)
+      # Preferred signature with outbox+BLE emit
+      start_classification(_feat_q, on_emit=_on_emit)
       if RUN_CORE_DIAGNOSTICS: print("[OK] start_classification (with on_emit)")
     except TypeError:
+      # Fallback when classifier has no on_emit param
       start_classification(_feat_q)
-      if RUN_CORE_DIAGNOSTICS: print("[WARN] start_classification() did not accept on_emit; events may not reach outbox.")
+      if RUN_CORE_DIAGNOSTICS:
+        print("[WARN] start_classification() did not accept on_emit; "
+              "BLE/outbox will not receive live events from classifier.")
+
     _services_running = True
   except Exception as e:
     if RUN_CORE_DIAGNOSTICS: print("[SERV] start_services error:", repr(e))
@@ -74,7 +150,7 @@ def stop_services():
   except Exception as e:
     if RUN_CORE_DIAGNOSTICS: print("[SERV] stop_classification error:", repr(e))
   try:
-    stop_audio_pipeline();
+    stop_audio_pipeline()
     if RUN_CORE_DIAGNOSTICS: print("[OK] stop_audio_pipeline")
   except Exception as e:
     if RUN_CORE_DIAGNOSTICS: print("[SERV] stop_audio_pipeline error:", repr(e))
@@ -85,16 +161,12 @@ def _run_ble():
   """Run BLE GLib loop in a background thread."""
   # Configure BLE behavior
   ble.DEVICE_NAME = "PosturePi"
-  ble.DEMO_HEARTBEAT = False  # no demo traffic
-  # Button/flow already defined inside nus_gatt_server:
-  # - Short press GPIO17 -> enter pairing (advertise until connected)
-  # - Hold GPIO17       -> disconnect (or cancel advertising)
-  # - Phone disconnect  -> resume services
+  ble.DEMO_HEARTBEAT = False  # no periodic demo traffic
 
-  # Give BLE the hooks so it can pause/resume our services.
+  # Pause/resume hooks so pairing doesn't fight the audio/classifier
   ble.set_service_hooks(stop_services, start_services)
 
-  # Block this thread inside GLib main loop
+  # Enter the GLib main loop (blocks this thread)
   ble.main()
 
 def start_ble_thread():
@@ -108,7 +180,6 @@ def start_ble_thread():
 def _stop_ble():
   """Ask BLE loop to quit gracefully (best-effort)."""
   try:
-    # Our BLE module exposes MAIN_LOOP; quitting it will end the thread.
     if getattr(ble, "MAIN_LOOP", None) is not None:
       ble.MAIN_LOOP.quit()
   except Exception:

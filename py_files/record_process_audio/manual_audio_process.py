@@ -9,7 +9,7 @@ from PyEMD import EMD
 from scipy.signal import hilbert, butter, sosfilt
 
 # functions
-from py_files.fn_cfg import RUN_RECORD_DIAGNOSTICS
+from py_files.fn_cfg import RUN_MORE_RECORD_DIAGNOSTICS
 
 # =========================
 # High-level toggles
@@ -172,7 +172,7 @@ def detect_breath_frames(y, sr, lower_pctl, upper_pctl, smooth_win):
     breath_frames = np.where(cand)[0]
     kept_pct = (len(breath_frames) / len(energy_s)) * 100
 
-    if RUN_RECORD_DIAGNOSTICS:
+    if RUN_MORE_RECORD_DIAGNOSTICS:
         print(f"[Detect] Band {lower_pctl}-{upper_pctl}th, smooth={smooth_win} → {len(breath_frames)} frames ({kept_pct:.1f}%)")
     return breath_frames, float(thr_low), float(thr_high), hop_len
 

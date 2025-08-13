@@ -11,6 +11,7 @@ FRAME_MS = 25             # analysis window length (e.g., 25 ms for speech)
 HOP_MS   = 10             # hop between frames (10 ms → 60% overlap at 25 ms)
 
 # ---- Diagnostics (enable/disable) ----
-RUN_RECORD_DIAGNOSTICS = False
+RUN_RECORD_DIAGNOSTICS = True
+RUN_MORE_RECORD_DIAGNOSTICS = False
 RUN_TRANSFORM_DIAGNOSTICS = True
 RUN_CLASSIFICATION_DIAGNOSTICS = True

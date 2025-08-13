@@ -1,5 +1,5 @@
 # import constants from cfg file
-from fn_cfg import REQ_CH, REQ_RATE, PERIOD
+from py_files.fn_cfg import REQ_CH, REQ_RATE, PERIOD
 
 # dependencies
 import alsaaudio

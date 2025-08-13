@@ -1,5 +1,5 @@
 # functions
-from fn_record_deviceinit import _fmt_name
+from py_files.record_process_audio.fn_record_deviceinit import _fmt_name
 
 # dependencies
 import numpy as np

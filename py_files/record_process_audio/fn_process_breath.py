@@ -2,7 +2,7 @@
 import numpy as np
 
 # expose manual processing file functions and constants to process OTG.
-import py_files.record_process.manual_audio_process as transform
+import py_files.record_process_audio.manual_audio_process as transform
 
 class RealTimeBreathDetector:
 	"""

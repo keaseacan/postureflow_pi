@@ -1,6 +1,6 @@
 # import functions
-from fn_record_threads import capture_thread, processing_thread
-from fn_record_buffer import stop_evt
+from py_files.record_process_audio.fn_record_threads import capture_thread, processing_thread
+from py_files.record_process_audio.fn_record_buffer import stop_evt
 
 # dependencies
 import queue

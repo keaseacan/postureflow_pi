@@ -16,8 +16,15 @@ def pi_setup():
   setup_i2c();                print("[OK] setup_i2c")
   ok = write_to_pi();         print(f"[OK] write_to_pi -> {ok}")
 
-  init_outbox();              print("[OK] init_outbox")
-  reset_session();            print("[OK] reset_session")
+  try:
+    init_outbox()
+    print("[OK] init_outbox")
+    reset_session()
+    print("[OK] reset_session")
+  except Exception as e:
+    print("[FAIL] init_outbox:", repr(e))
+    import traceback; traceback.print_exc()
+    raise
 
   feat_q = start_audio_pipeline();  print("[OK] start_audio_pipeline")
 
@@ -58,12 +65,22 @@ def _graceful_shutdown(_sig=None, _frame=None):
 signal.signal(signal.SIGINT, _graceful_shutdown)
 signal.signal(signal.SIGTERM, _graceful_shutdown)
 
+import traceback
+
 if __name__ == "__main__":
-  try:
-    _ = pi_setup()
-    while True:
-      time.sleep(0.5)  # idle; worker threads do the work
-  except KeyboardInterrupt:
-    pass
-  finally:
-    _graceful_shutdown()
+    exit_code = 0
+    try:
+        _ = pi_setup()
+        print("[MAIN] after pi_setup; entering idle loop")
+        while True:
+            time.sleep(0.5)
+    except BaseException as e:
+        exit_code = 1
+        print("[FATAL] Uncaught exception:", repr(e))
+        traceback.print_exc()
+    finally:
+        # don't hide the exception; pass the exit code through
+        try:
+            _graceful_shutdown()
+        finally:
+            sys.exit(exit_code)

@@ -2,6 +2,9 @@
 import json
 from typing import List, Dict, Any
 
+# constants
+from py_files.fn_cfg import RUN_JSON_DIAGNOSTICS
+
 class ChangeEventTransport:
   """
   Converts SpoolWorker's normalized rows to minimal 'v1.change' JSON and prints it.
@@ -28,5 +31,6 @@ class ChangeEventTransport:
       "n": len(wire),
       "events": wire
     }
-    print(json.dumps(payload, separators=(",", ":")))
+    if RUN_JSON_DIAGNOSTICS:
+      print(json.dumps(payload, separators=(",", ":")))
     return True

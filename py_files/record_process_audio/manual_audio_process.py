@@ -8,6 +8,9 @@ import soundfile as sf
 from PyEMD import EMD
 from scipy.signal import hilbert, butter, sosfilt
 
+# functions
+from py_files.fn_cfg import RUN_RECORD_DIAGNOSTICS
+
 # =========================
 # High-level toggles
 # =========================
@@ -168,7 +171,9 @@ def detect_breath_frames(y, sr, lower_pctl, upper_pctl, smooth_win):
     cand = (energy_s > thr_low) & (energy_s < thr_high)
     breath_frames = np.where(cand)[0]
     kept_pct = (len(breath_frames) / len(energy_s)) * 100
-    print(f"[Detect] Band {lower_pctl}-{upper_pctl}th, smooth={smooth_win} → {len(breath_frames)} frames ({kept_pct:.1f}%)")
+
+    if RUN_RECORD_DIAGNOSTICS:
+        print(f"[Detect] Band {lower_pctl}-{upper_pctl}th, smooth={smooth_win} → {len(breath_frames)} frames ({kept_pct:.1f}%)")
     return breath_frames, float(thr_low), float(thr_high), hop_len
 
 # --------------- Build segments -------------------

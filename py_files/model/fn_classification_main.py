@@ -4,7 +4,7 @@ import threading
 import queue
 from typing import Optional, Callable
 
-from py_files.model.fn_classification_model import classify_idx, classify_imfs, class_map
+from py_files.model.fn_classification_model import classify_imfs, class_map
 from py_files.fn_cfg import RUN_CLASSIFICATION_DIAGNOSTICS
 
 _cls_thread = None

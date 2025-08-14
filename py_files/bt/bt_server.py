@@ -20,6 +20,7 @@ from gi.repository import GLib
 # config constants
 from py_files.fn_cfg import DEVICE_NAME, GPIO_BUTTON_PIN, BUTTON_HOLD_SEC, DEMO_HEARTBEAT, DEMO_HEARTBEAT_SEC
 from py_files.fn_cfg import NUS_SERVICE_UUID, NUS_RX_UUID, NUS_TX_UUID, ADVERTISE_SERVICE_UUIDS
+from py_files.fn_cfg import RUN_LIVE_BLE_DIAGNOSTICS
 
 # ---------- BlueZ constants ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'
@@ -402,7 +403,7 @@ def main():
     def _status_tick():
         state['spin_idx'] = (state['spin_idx'] + 1) % len(_spinner_frames)
         sp = _spinner_frames[state['spin_idx']]
-        now = time.time()
+        now = time.monotonic()
         adv = state['adv_registered']; conn = state['client_connected']
         adv_dur  = _fmt_dur((now - state['t_adv_start']) if adv and state['t_adv_start'] else 0)
         conn_dur = _fmt_dur((now - state['t_conn_start']) if conn and state['t_conn_start'] else 0)
@@ -410,7 +411,8 @@ def main():
         try: sys.stdout.write(line); sys.stdout.flush()
         except Exception: pass
         return True
-    GLib.timeout_add(500, _status_tick)
+    if RUN_LIVE_BLE_DIAGNOSTICS:
+        GLib.timeout_add(500, _status_tick)
 
     # Clean shutdown
     def _handle_sig(*_):

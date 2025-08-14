@@ -17,7 +17,7 @@ LABEL_ENCODER_PATH = "label_encoder.joblib"
 # ---- Diagnostics (enable/disable) ----
 # Slow, takes up thread
 RUN_RECORD_DIAGNOSTICS = False
-RUN_MORE_RECORD_DIAGNOSTICS = True
+RUN_MORE_RECORD_DIAGNOSTICS = False
 RUN_TRANSFORM_DIAGNOSTICS = False
 RUN_CLASSIFICATION_DIAGNOSTICS = True
 RUN_JSON_DIAGNOSTICS = False

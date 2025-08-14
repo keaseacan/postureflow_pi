@@ -4,17 +4,15 @@ import sys
 import signal
 import threading
 import traceback
-import json
-from typing import Any, Optional
 
 # functions
-from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble, ble_send
+from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble
+from py_files.bt.bt_reply import _handle_ble_command
 from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
 from py_files.fn_time import setup_i2c, write_to_pi
 from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox
-from py_files.data_output.fn_data_outbox import ack as outbox_ack
 
 # diagnostic constants
 from py_files.fn_cfg import RUN_CORE_DIAGNOSTICS
@@ -98,55 +96,6 @@ def stop_services():
     _feat_q = None
     _services_running = False
 
-# ---------- Optional: BLE command handler ----------
-def _handle_ble_command(msg: Any):
-  """
-  Supports "start" / "stop" / "status".
-  Normalize bytes/str/json to a 'cmd' string.
-  Replies via ble_send() if available.
-  """
-  cmd: Optional[str] = None
-  def reply(payload):
-    ble_send(payload)  # wrapper-safe (no-op if BLE not started)
-
-  try:
-    if isinstance(msg, (bytes, bytearray)):
-      s = msg.decode('utf-8', errors='ignore').strip()
-      try:
-        obj = json.loads(s); cmd = (obj.get('cmd') or s).strip().lower()
-      except Exception:
-        cmd = s.lower()
-    elif isinstance(msg, str):
-      s = msg.strip()
-      try:
-        obj = json.loads(s); cmd = (obj.get('cmd') or s).strip().lower()
-      except Exception:
-        cmd = s.lower()
-    elif isinstance(msg, dict):
-      cmd = str(msg.get('cmd', '')).strip().lower()
-    elif cmd == "ack":
-      ids = obj.get("ids", [])
-      try:
-        outbox_ack([int(i) for i in ids])
-        reply({"ok": True})
-      except Exception as e:
-        reply({"ok": False, "err": f"bad_ack:{e}"})
-  except Exception:
-    cmd = None
-
-  if not cmd:
-    reply({"ok": False, "err": "bad_command"}); return
-
-  if cmd == "start":
-    start_services(); reply({"ok": True, "state": "running"})
-  elif cmd == "stop":
-    stop_services(); reply({"ok": True, "state": "stopped"})
-  elif cmd == "status":
-    reply({"ok": True, "status": {"running": _services_running}})
-  else:
-    reply({"ok": False, "err": f"unknown_cmd:{cmd}"})
-
-
 # ---------- Shutdown handling ----------
 def _graceful_shutdown(_sig=None, _frame=None):
   """Ensure threads stop and outbox is flushed (idempotent)."""
@@ -203,10 +152,7 @@ def main():
   finally:
     _graceful_shutdown()
     try:
-      join_ble(timeout=1.5)   # ⬅️ wrapper
+      join_ble(timeout=1.5)
     except Exception:
       pass
     sys.exit(exit_code)
-
-if __name__ == "__main__":
-  main()

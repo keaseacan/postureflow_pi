@@ -30,8 +30,6 @@ def read_rtc()->list:
     print("[RTC] ds3231 rtc not read")
 
 # fix system time based on rtc
-import subprocess
-from datetime import datetime
 
 def write_to_pi() -> bool:
     try:

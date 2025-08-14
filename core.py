@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# dependencies
 import time
 import sys
 import signal
@@ -7,13 +7,18 @@ import traceback
 import json
 from typing import Any, Optional
 
-# ⬇️ use wrapper-style BLE API
-from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble, ble_send, BleTransport
+# functions
+from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble, ble_send
+from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
 from py_files.fn_time import setup_i2c, write_to_pi
 from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox
+from py_files.data_output.fn_data_outbox import ack as outbox_ack
+
+# diagnostic constants
 from py_files.fn_cfg import RUN_CORE_DIAGNOSTICS
+
 
 _shutdown_once = False
 _shutdown_ev = threading.Event()
@@ -32,7 +37,7 @@ def pi_setup():
   if RUN_CORE_DIAGNOSTICS: print(f"[OK] write_to_pi")
 
   try:
-    init_outbox(transport=BleTransport)
+    init_outbox(transport=ChangeEventTransport)
     if RUN_CORE_DIAGNOSTICS: print("[OK] init_outbox")
     reset_session()
     if RUN_CORE_DIAGNOSTICS: print("[OK] reset_session")
@@ -55,7 +60,7 @@ def start_services():
 
       def _on_emit(idx: int, ts_ms: int):
         try:
-          emit_classification({"idx": int(idx), "ts_ms": int(ts_ms)})
+          emit_classification(int(idx), int(ts_ms))
         except Exception as e:
           if RUN_CORE_DIAGNOSTICS: print("[OUTBOX] emit error:", repr(e))
 
@@ -101,6 +106,8 @@ def _handle_ble_command(msg: Any):
   Replies via ble_send() if available.
   """
   cmd: Optional[str] = None
+  def reply(payload):
+    ble_send(payload)  # wrapper-safe (no-op if BLE not started)
 
   try:
     if isinstance(msg, (bytes, bytearray)):
@@ -117,11 +124,15 @@ def _handle_ble_command(msg: Any):
         cmd = s.lower()
     elif isinstance(msg, dict):
       cmd = str(msg.get('cmd', '')).strip().lower()
+    elif cmd == "ack":
+      ids = obj.get("ids", [])
+      try:
+        outbox_ack([int(i) for i in ids])
+        reply({"ok": True})
+      except Exception as e:
+        reply({"ok": False, "err": f"bad_ack:{e}"})
   except Exception:
     cmd = None
-
-  def reply(payload):
-    ble_send(payload)  # wrapper-safe (no-op if BLE not started)
 
   if not cmd:
     reply({"ok": False, "err": "bad_command"}); return

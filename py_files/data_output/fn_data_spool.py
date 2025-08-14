@@ -1,5 +1,9 @@
 # dependencies
-import sqlite3, json, time, uuid, threading
+import sqlite3
+import json
+import time
+import uuid
+import threading
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Sequence
 
@@ -55,9 +59,9 @@ class Spool:
 		with self._lock, self.conn:
 			cur = self.conn.execute(
 				"""INSERT INTO spool(ts_ms, cls_idx, cls_label, score, extras, state, attempts, next_attempt_ms)
-				   VALUES(?,?,?,?,?,'queued',0,0);""",
+					VALUES(?,?,?,?,?,'queued',0,0);""",
 				(ev.ts_ms, ev.cls_idx, ev.cls_label, ev.score,
-				 json.dumps(ev.meta, separators=(",", ":")) if ev.meta else None)
+				json.dumps(ev.meta, separators=(",", ":")) if ev.meta else None)
 			)
 			return cur.lastrowid
 
@@ -92,9 +96,9 @@ class Spool:
 		with self._lock, self.conn:
 			rows = self.conn.execute(
 				"""SELECT id FROM spool
-				   WHERE state='queued' AND next_attempt_ms <= ?
-				   ORDER BY ts_ms ASC
-				   LIMIT ?;""",
+					WHERE state='queued' AND next_attempt_ms <= ?
+					ORDER BY ts_ms ASC
+					LIMIT ?;""",
 				(now, limit)
 			).fetchall()
 			if not rows:
@@ -102,7 +106,7 @@ class Spool:
 			ids = [r["id"] for r in rows]
 			q = ",".join("?" for _ in ids)
 			self.conn.execute(
-				f"""UPDATE spool SET state='inflight', lock_uuid=?, next_attempt_ms=?
+					f"""UPDATE spool SET state='inflight', lock_uuid=?, next_attempt_ms=?
 					WHERE id IN ({q});""",
 				(token, now + lease_ms, *ids)
 			)
@@ -181,8 +185,7 @@ class Transport:
 class StdoutTransport(Transport):
 	"""Debug transport: dumps full DB rows as JSON (not used for wire)."""
 	def send_batch(self, batch_events: List[Dict[str, Any]]) -> bool:
-		print(json.dumps({"type": "debug_dump", "n": len(batch_events), "rows": batch_events},
-						 separators=(",", ":")))
+		print(json.dumps({"type": "debug_dump", "n": len(batch_events), "rows": batch_events},separators=(",", ":")))
 		return True
 
 class SpoolWorker(threading.Thread):
@@ -209,47 +212,44 @@ class SpoolWorker(threading.Thread):
 		self._stop.set()
 
 	def run(self) -> None:
-		while not self._stop.is_set():
-			now = _now_ms()
+			while not self._stop.is_set():
+					now = _now_ms()
 
-			# periodic prune (cheap seatbelt)
-			if now - self._last_prune_ms >= self.prune_interval_s * 1000:
-				self.spool.prune_keep_most_recent(self.prune_max_rows)
-				self._last_prune_ms = now
+					if now - self._last_prune_ms >= self.prune_interval_s * 1000:
+							self.spool.prune_keep_most_recent(self.prune_max_rows)
+							self._last_prune_ms = now
 
-			rows, _token = self.spool.claim_batch(limit=self.batch_size)
+					rows, _token = self.spool.claim_batch(limit=self.batch_size)
 
-			if not rows:
-				# idle: nice time to checkpoint occasionally
-				if now - self._last_ckpt_ms >= self.checkpoint_interval_s * 1000:
-					self.spool.wal_checkpoint()
-					self._last_ckpt_ms = now
-				time.sleep(self.idle_sleep_s)
-				continue
+					if not rows:
+							if now - self._last_ckpt_ms >= self.checkpoint_interval_s * 1000:
+									self.spool.wal_checkpoint()
+									self._last_ckpt_ms = now
+							time.sleep(self.idle_sleep_s)
+							continue
 
-		# normalize DB rows -> event dicts for the transport
-		events = []
-		ids = []
-		for r in rows:
-			ids.append(r["id"])
-			events.append({
-				"id": r["id"],
-				"ts_ms": r["ts_ms"],
-				"cls": {"idx": r["cls_idx"], "label": r["cls_label"], "score": r["score"]},
-				"meta": json.loads(r["extras"]) if r["extras"] else None
-			})
+					# >>> everything below was previously dedented <<<
 
-		# send the batch (transport returns True/False)
-		ok = False
-		try:
-			ok = self.transport.send_batch(events)
-		except Exception:
-			ok = False
+					# normalize DB rows -> event dicts for the transport
+					events, ids = [], []
+					for r in rows:
+							ids.append(r["id"])
+							events.append({
+									"id": r["id"],
+									"ts_ms": r["ts_ms"],
+									"cls": {"idx": r["cls_idx"], "label": r["cls_label"], "score": r["score"]},
+									"meta": json.loads(r["extras"]) if r["extras"] else None
+							})
 
-		if ok:
-			# ACK mode: mark as delivered and wait for phone ACK to delete later
-			# (requires Spool.mark_delivered and Spool.ack implemented)
-			self.spool.mark_delivered(ids, ack_timeout_ms=30000)  # 30s re-send if no ACK
-		else:
-			# send failed or not ready (e.g., no BLE subscriber) -> backoff and retry later
-			self.spool.mark_failed(ids)
+					# send the batch (transport returns True/False)
+					ok = False
+					try:
+							ok = self.transport.send_batch(events)
+					except Exception:
+							ok = False
+
+					if ok:
+							# Wait for phone ACK (it will send {"cmd":"ack","ids":[...]}).
+							self.spool.mark_delivered(ids, ack_timeout_ms=30000)
+					else:
+							self.spool.mark_failed(ids)

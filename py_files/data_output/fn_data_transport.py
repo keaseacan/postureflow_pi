@@ -2,6 +2,9 @@
 import json
 from typing import List, Dict, Any
 
+# functions
+from py_files.bt.bt_transport import ble_send
+
 # constants
 from py_files.fn_cfg import RUN_JSON_DIAGNOSTICS
 
@@ -33,4 +36,5 @@ class ChangeEventTransport:
     }
     if RUN_JSON_DIAGNOSTICS:
       print(json.dumps(payload, separators=(",", ":")))
+    ble_send(payload)
     return True

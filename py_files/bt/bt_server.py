@@ -2,26 +2,24 @@
 """
 BLE Peripheral (NUS) with "press to pair, hold to disconnect" on GPIO17.
 """
-import json, queue, threading, time, signal, sys
-from typing import Callable, Optional
-import dbus, dbus.exceptions, dbus.mainloop.glib, dbus.service
+
+# dependencies
+import json
+import queue
+import threading
+import time
+import signal
+import sys
+import dbus
+import dbus.exceptions
+import dbus.mainloop.glib
+import dbus.service
+from typing import Callable, Optional, Any
 from gi.repository import GLib
 
-# ---------- Config ----------
-DEVICE_NAME = "PosturePi"
-GPIO_BUTTON_PIN = 17      # BCM (pin 11)
-BUTTON_HOLD_SEC = 1.2
-
-DEMO_HEARTBEAT = True           # <<< enable heartbeat
-DEMO_HEARTBEAT_SEC = 2          # <<< heartbeat interval
-
-# NUS UUIDs
-NUS_SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
-NUS_RX_UUID      = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
-NUS_TX_UUID      = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
-
-# --- ADV privacy toggle ---
-ADVERTISE_SERVICE_UUIDS = True
+# config constants
+from py_files.fn_cfg import DEVICE_NAME, GPIO_BUTTON_PIN, BUTTON_HOLD_SEC, DEMO_HEARTBEAT, DEMO_HEARTBEAT_SEC
+from py_files.fn_cfg import NUS_SERVICE_UUID, NUS_RX_UUID, NUS_TX_UUID, ADVERTISE_SERVICE_UUIDS
 
 # ---------- BlueZ constants ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'
@@ -75,6 +73,29 @@ def ble_send_label(label: str, ts_ms: Optional[int]=None, **extra):
     if extra:
         payload.update(extra)
     ble_send(payload)
+
+# --- public hooks/shims for transport integration (2-way API) ---
+_rx_handler = None  # fn(dict|list|str|bytes) -> None
+
+def set_rx_handler(fn: Callable[[Any], None]):
+    """Transport/core-provided RX handler. Receives parsed JSON (any type) or raw text."""
+    global _rx_handler
+    _rx_handler = fn
+
+def send_json(obj: Any):
+    """Outbound JSON helper (newline-delimited)."""
+    ble_send(obj if isinstance(obj, dict) else {"data": obj})
+
+def send_text(s: str):
+    """Outbound text helper (wrapped in a small JSON)."""
+    ble_send({"text": str(s)})
+
+def send(payload: Any):
+    """Generic outbound helper."""
+    if isinstance(payload, (dict, list)):
+        send_json(payload)
+    else:
+        send_text(str(payload))
 
 # ---------- Rolling status line ----------
 _spinner_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -142,7 +163,7 @@ class Characteristic(dbus.service.Object):
 class NusRxCharacteristic(Characteristic):
     def __init__(self, bus, index, service):
         super().__init__(bus, index, NUS_RX_UUID, ['write','write-without-response'], service)
-        self.on_line = None   # <<< callback for parsed JSON/cmds
+        self.on_line = None   # callback for parsed JSON / text lines
     @dbus.service.method('org.bluez.GattCharacteristic1', in_signature='aya{sv}')
     def WriteValue(self, value, options):
         try:
@@ -150,14 +171,18 @@ class NusRxCharacteristic(Characteristic):
             for line in s.splitlines():
                 line=line.strip()
                 if not line: continue
+                # Try JSON first; if not JSON, pass raw text
                 try:
                     obj = json.loads(line)
                     print('\n[BLE][RX]', obj)
-                    if isinstance(obj, dict) and self.on_line:
+                    if self.on_line:
                         self.on_line(obj)
                 except Exception:
                     print('\n[BLE][RX] text:', line)
-        except Exception as e: print('\n[BLE][RX] parse-error:', e)
+                    if self.on_line:
+                        self.on_line(line)
+        except Exception as e:
+            print('\n[BLE][RX] parse-error:', e)
 
 class NusTxCharacteristic(Characteristic):
     def __init__(self, bus, index, service):
@@ -244,7 +269,7 @@ def main():
         't_adv_start': None,
         't_conn_start': None,
         'spin_idx': 0,
-        'hb_src': None,   # <<< GLib source id for heartbeat
+        'hb_src': None,   # GLib source id for heartbeat
     }
 
     def _register_adv():
@@ -301,25 +326,30 @@ def main():
         print(f"\n[BLE] gpiozero unavailable ({e}); you can still pair via manual call to enter_pairing_mode()")
         GLib.idle_add(_register_adv)
 
-    # ---- RX command handler (from phone) <<< ----
-    def on_rx_cmd(obj: dict):
-        cmd = str(obj.get('cmd', '')).lower()
-        if cmd == 'ping':
-            ble_send_label('pong')
-        elif cmd == 'echo':
-            msg = obj.get('msg', '')
-            ble_send_label('echo', msg=msg)
-        elif cmd == 'hb' and 'enable' in obj:
-            enable = bool(obj['enable'])
-            if enable and state['hb_src'] is None:
-                state['hb_src'] = GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat_tick)
-                ble_send_label('hb_on')
-            elif not enable and state['hb_src'] is not None:
-                GLib.source_remove(state['hb_src']); state['hb_src'] = None
-                ble_send_label('hb_off')
-        # add more commands here as needed
+    # ---- Built-in RX command handler (fallback if no external handler set) ----
+    def on_rx_cmd(obj: dict|str|bytes):
+        if isinstance(obj, dict):
+            cmd = str(obj.get('cmd', '')).lower()
+            if cmd == 'ping':
+                ble_send_label('pong')
+            elif cmd == 'echo':
+                msg = obj.get('msg', '')
+                ble_send_label('echo', msg=msg)
+            elif cmd == 'hb' and 'enable' in obj:
+                enable = bool(obj['enable'])
+                if enable and state['hb_src'] is None:
+                    state['hb_src'] = GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat_tick)
+                    ble_send_label('hb_on')
+                elif not enable and state['hb_src'] is not None:
+                    GLib.source_remove(state['hb_src']); state['hb_src'] = None
+                    ble_send_label('hb_off')
+        elif isinstance(obj, str):
+            # example text command: "ping"
+            if obj.strip().lower() == 'ping':
+                ble_send_label('pong')
 
-    nus.rx.on_line = on_rx_cmd
+    # Prefer transport-provided RX handler if present
+    nus.rx.on_line = _rx_handler if _rx_handler else on_rx_cmd
 
     # Connection hooks via notifications
     def start_heartbeat():

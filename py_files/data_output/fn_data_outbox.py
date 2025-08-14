@@ -1,5 +1,5 @@
 # dependencies
-from typing import Optional
+from typing import Optional, Sequence
 
 # functions
 from py_files.data_output.fn_data_main import JsonOutbox, _now_ms  # uses the spool/worker/transport we set up
@@ -38,6 +38,8 @@ def close_outbox() -> None:
     _outbox.close()
     _outbox = None
 
-def get_emit_callable():
-  """Convenience: returns the 'emit' function to pass into your classifier."""
-  return emit
+def ack(ids: Sequence[int]) -> None:
+  """Delete delivered rows after phone confirms receipt."""
+  if _outbox is None:
+    return
+  _outbox.spool.ack(list(ids))

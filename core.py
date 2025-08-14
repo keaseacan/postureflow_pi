@@ -24,7 +24,7 @@ _shutdown_once = False
 _shutdown_ev = threading.Event()
 
 # Track service lifecycle so BLE can pause/resume them
-global _services_running = False
+_services_running = False
 _services_lock = threading.Lock()
 _feat_q = None
 

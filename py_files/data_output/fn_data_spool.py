@@ -7,6 +7,9 @@ import threading
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Sequence
 
+# constant
+from py_files.fn_cfg import RUN_JSON_DIAGNOSTICS
+
 _DEFAULT_DB = "posture_spool.db"
 
 # timestamp
@@ -63,7 +66,19 @@ class Spool:
 				(ev.ts_ms, ev.cls_idx, ev.cls_label, ev.score,
 				json.dumps(ev.meta, separators=(",", ":")) if ev.meta else None)
 			)
-			return cur.lastrowid
+			row_id = cur.lastrowid
+			if RUN_JSON_DIAGNOSTICS:
+				try:
+						print(json.dumps({
+								"type": "spool_enqueued",
+								"id": row_id,
+								"ts_ms": ev.ts_ms,
+								"cls": {"idx": ev.cls_idx, "label": ev.cls_label, "score": ev.score},
+								"meta": ev.meta or None
+						}, separators=(",", ":"), ensure_ascii=False), flush=True)
+				except Exception as e:
+						print(f"[DEBUG] enqueue print failed: {e}", flush=True)
+			return row_id
 
 	# re-queue expired 'inflight' rows whose lease has timed out
 	def _reclaim_expired(self) -> None:
@@ -233,13 +248,21 @@ class SpoolWorker(threading.Thread):
 					# normalize DB rows -> event dicts for the transport
 					events, ids = [], []
 					for r in rows:
-							ids.append(r["id"])
-							events.append({
+						ids.append(r["id"])
+						e = {
 									"id": r["id"],
 									"ts_ms": r["ts_ms"],
 									"cls": {"idx": r["cls_idx"], "label": r["cls_label"], "score": r["score"]},
 									"meta": json.loads(r["extras"]) if r["extras"] else None
-							})
+								}
+						events.append(e)
+
+						if RUN_JSON_DIAGNOSTICS:
+							try:
+								print(json.dumps({"type": "spool_batch_add", "event": e},
+																separators=(",", ":"), ensure_ascii=False), flush=True)
+							except Exception as ex:
+								print(f"[DEBUG] batch-add print failed: {ex}", flush=True)
 
 					# send the batch (transport returns True/False)
 					ok = False

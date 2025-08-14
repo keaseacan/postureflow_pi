@@ -40,3 +40,12 @@ NUS_TX_UUID      = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
 
 # --- ADV privacy toggle ---
 ADVERTISE_SERVICE_UUIDS = True
+
+# ---- RTC ----
+# Hardware defs
+I2C_PORT: int = 1
+RTC_ADDR: int = 0x68  # DS3231
+
+# Soft clock / anchor
+ANCHOR_PATH = "/var/lib/postureflow/clock_anchor.json"  # change if you prefer
+MIN_VALID_UNIX_MS = 1704067200000  # 2024-01-01 UTC

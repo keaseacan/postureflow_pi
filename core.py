@@ -9,11 +9,12 @@ from typing import Optional, Any
 
 # functions
 from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble, ble_send
+from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox, ack as outbox_ack
 from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
-from py_files.fn_time import setup_i2c, write_to_pi
-from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox, ack as outbox_ack
+from py_files.time.time_softclock import setup_i2c
+from py_files.time.time_main import init_clock, apply_phone_time_sync, _now_ms
 
 # diagnostic constants
 from py_files.fn_cfg import RUN_CORE_DIAGNOSTICS
@@ -23,7 +24,7 @@ _shutdown_once = False
 _shutdown_ev = threading.Event()
 
 # Track service lifecycle so BLE can pause/resume them
-_services_running = False
+global _services_running = False
 _services_lock = threading.Lock()
 _feat_q = None
 
@@ -32,8 +33,8 @@ def pi_setup():
   print("Setup: initializing hardware...")
   setup_i2c()
   if RUN_CORE_DIAGNOSTICS: print("[OK] setup_i2c")
-  write_to_pi()
-  if RUN_CORE_DIAGNOSTICS: print(f"[OK] write_to_pi")
+  init_clock()
+  if RUN_CORE_DIAGNOSTICS: print("[OK] clock initialised")
 
   try:
     init_outbox(transport=ChangeEventTransport)
@@ -125,53 +126,96 @@ def _on_signal(sig, frame):
 signal.signal(signal.SIGINT, _on_signal)
 signal.signal(signal.SIGTERM, _on_signal)
 
-# ---- BT reeply handling ----
+# ---- BLE reply handling ----
 def _handle_ble_command(msg: Any):
   """
-  Supports "start" / "stop" / "status".
-  Normalize bytes/str/json to a 'cmd' string.
-  Replies via ble_send() if available.
+  Supports: start | stop | status | ack | time_sync
+  msg may be bytes/str/json/dict. Replies via ble_send(...) as JSON (dict).
   """
-  cmd: Optional[str] = None
-  def reply(payload):
-    ble_send(payload)  # wrapper-safe (no-op if BLE not started)
-
-  try:
-    if isinstance(msg, (bytes, bytearray)):
-      s = msg.decode('utf-8', errors='ignore').strip()
+  def reply(obj: dict):
       try:
-        obj = json.loads(s); cmd = (obj.get('cmd') or s).strip().lower()
+          ble_send(obj)  # <-- pass dict; ble_send will json.dumps for you
       except Exception:
-        cmd = s.lower()
-    elif isinstance(msg, str):
+          pass
+
+  # ---- Normalize input to a dict 'obj' ----
+  obj: Optional[dict] = None
+  if isinstance(msg, (bytes, bytearray)):
+      s = msg.decode("utf-8", "ignore").strip()
+      try:
+          obj = json.loads(s)
+      except Exception:
+          obj = {"cmd": s}
+  elif isinstance(msg, str):
       s = msg.strip()
       try:
-        obj = json.loads(s); cmd = (obj.get('cmd') or s).strip().lower()
+          obj = json.loads(s)
       except Exception:
-        cmd = s.lower()
-    elif isinstance(msg, dict):
-      cmd = str(msg.get('cmd', '')).strip().lower()
-    elif cmd == "ack":
-      ids = obj.get("ids", [])
-      try:
-        outbox_ack([int(i) for i in ids])
-        reply({"ok": True})
-      except Exception as e:
-        reply({"ok": False, "err": f"bad_ack:{e}"})
-  except Exception:
-    cmd = None
+          obj = {"cmd": s}
+  elif isinstance(msg, dict):
+      obj = msg.copy()
+  else:
+      reply({"ok": False, "err": "bad_type"})
+      return
 
+  cmd = str(obj.get("cmd", "")).strip().lower()
   if not cmd:
-    reply({"ok": False, "err": "bad_command"}); return
+      reply({"ok": False, "err": "bad_command"})
+      return
+
+  # ---- Commands ----
+  if cmd == "ack":
+      ids = obj.get("ids", [])
+      if not isinstance(ids, list):
+          reply({"ok": False, "err": "ack.ids_not_list"})
+          return
+      if outbox_ack is None:
+          reply({"ok": False, "err": "ack_handler_unavailable"})
+          return
+      try:
+          outbox_ack([int(i) for i in ids])
+          reply({"ok": True, "cmd": "ack", "n": len(ids)})
+      except Exception as e:
+          reply({"ok": False, "err": f"bad_ack:{e}"})
+      return
+
+  if cmd == "time_sync":
+      # Phone should send: {"cmd":"time_sync","epoch_ms": <utc_ms>}
+      epoch_ms = obj.get("epoch_ms")
+      if epoch_ms is None:
+          reply({"ok": False, "err": "missing_epoch_ms"})
+          return
+      try:
+          epoch_ms = int(epoch_ms)
+      except Exception:
+          reply({"ok": False, "err": "bad_epoch_ms"})
+          return
+
+      drift_ms = abs(_now_ms() - epoch_ms)
+      if drift_ms > 1000:
+          sys_ok, rtc_ok = apply_phone_time_sync(epoch_ms)
+      else:
+          # Already in sync (≤1s drift); avoid thrashing system/RTC
+          sys_ok = rtc_ok = True
+      reply({"ok": True, "cmd": "time_sync", "drift_ms": drift_ms, "sys_ok": sys_ok, "rtc_ok": rtc_ok})
+      return
 
   if cmd == "start":
-    start_services(); reply({"ok": True, "state": "running"})
-  elif cmd == "stop":
-    stop_services(); reply({"ok": True, "state": "stopped"})
-  elif cmd == "status":
-    reply({"ok": True, "status": {"running": _services_running}})
-  else:
-    reply({"ok": False, "err": f"unknown_cmd:{cmd}"})
+      start_services()
+      reply({"ok": True, "state": "running"})
+      return
+
+  if cmd == "stop":
+      stop_services()
+      reply({"ok": True, "state": "stopped"})
+      return
+
+  if cmd == "status":
+      reply({"ok": True, "status": {"running": _services_running}})
+      return
+
+  # Unknown
+  reply({"ok": False, "err": f"unknown_cmd:{cmd}"})
 
 
 # ---------- Main ----------

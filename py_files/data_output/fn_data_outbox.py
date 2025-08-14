@@ -2,7 +2,8 @@
 from typing import Optional, Sequence
 
 # functions
-from py_files.data_output.fn_data_main import JsonOutbox, _now_ms  # uses the spool/worker/transport we set up
+from py_files.data_output.fn_data_main import JsonOutbox # uses the spool/worker/transport we set up
+from py_files.time.time_softclock import _now_ms
 
 _outbox: Optional[JsonOutbox] = None  # module-level singleton
 

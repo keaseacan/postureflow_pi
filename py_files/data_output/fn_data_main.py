@@ -4,9 +4,10 @@ from typing import Dict, Any, Optional
 
 # functions
 from py_files.data_output.fn_data_events import ChangeEventEmitter
-from py_files.data_output.fn_data_spool import Spool, SpoolWorker, ClassEvent, _now_ms
+from py_files.data_output.fn_data_spool import Spool, SpoolWorker, ClassEvent
 from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.model.fn_classification_model import class_map
+from py_files.time.time_softclock import _now_ms
 
 class JsonOutbox:
   def __init__(self, db_path: str = "posture_spool.db", transport=None, batch_size: int = 32):

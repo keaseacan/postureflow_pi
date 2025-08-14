@@ -21,6 +21,7 @@ from gi.repository import GLib
 from py_files.fn_cfg import DEVICE_NAME, GPIO_BUTTON_PIN, BUTTON_HOLD_SEC, DEMO_HEARTBEAT, DEMO_HEARTBEAT_SEC
 from py_files.fn_cfg import NUS_SERVICE_UUID, NUS_RX_UUID, NUS_TX_UUID, ADVERTISE_SERVICE_UUIDS
 from py_files.fn_cfg import RUN_LIVE_BLE_DIAGNOSTICS
+from py_files.time.time_softclock import _now_ms, apply_phone_time_sync
 
 # ---------- BlueZ constants ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'
@@ -61,9 +62,6 @@ def _resume_services_async():
         threading.Thread(target=_safe_call, args=("resume", _resume_cb), daemon=True).start()
 
 # --------- Convenience sends ----------
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
 def ble_send(obj: dict):
     """Queue a JSON line for TX notifications."""
     _tx_queue.put((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -192,6 +190,7 @@ class NusTxCharacteristic(Characteristic):
     @dbus.service.method('org.bluez.GattCharacteristic1')
     def StartNotify(self):
         super().StartNotify()
+        ble_send({"cmd": "time_sync_req"})
         try: self.on_start_notify and self.on_start_notify()
         except Exception as e: print('\n[BLE] on_start_notify error:', e)
     @dbus.service.method('org.bluez.GattCharacteristic1')
@@ -277,7 +276,7 @@ def main():
         if state['adv_registered']: return False
         def ok():
             state['adv_registered'] = True
-            state['t_adv_start'] = time.time()
+            state['t_adv_start'] = time.monotonic()   # ← monotonic
             print('\n[BLE] Advertising started')
             return False
         def err(e):
@@ -329,14 +328,34 @@ def main():
 
     # ---- Built-in RX command handler (fallback if no external handler set) ----
     def on_rx_cmd(obj: Union[dict, str, bytes]):
+        # structured JSON
         if isinstance(obj, dict):
-            cmd = str(obj.get('cmd', '')).lower()
+            cmd = str(obj.get('cmd', '')).strip().lower()
+
+            if cmd == 'time_sync':
+                epoch_ms = obj.get('epoch_ms')
+                if epoch_ms is None:
+                    ble_send({"ok": False, "err": "missing_epoch_ms"}); return
+                try:
+                    epoch_ms = int(epoch_ms)
+                except Exception:
+                    ble_send({"ok": False, "err": "bad_epoch_ms"}); return
+                drift = abs(_now_ms() - epoch_ms)
+                if drift > 1000:
+                    sys_ok, rtc_ok = apply_phone_time_sync(epoch_ms)
+                else:
+                    sys_ok = rtc_ok = True
+                ble_send({"ok": True, "cmd": "time_sync", "drift_ms": drift, "sys_ok": sys_ok, "rtc_ok": rtc_ok})
+                return
+
             if cmd == 'ping':
-                ble_send_label('pong')
-            elif cmd == 'echo':
+                ble_send_label('pong'); return
+
+            if cmd == 'echo':
                 msg = obj.get('msg', '')
-                ble_send_label('echo', msg=msg)
-            elif cmd == 'hb' and 'enable' in obj:
+                ble_send_label('echo', msg=msg); return
+
+            if cmd == 'hb' and 'enable' in obj:
                 enable = bool(obj['enable'])
                 if enable and state['hb_src'] is None:
                     state['hb_src'] = GLib.timeout_add_seconds(DEMO_HEARTBEAT_SEC, heartbeat_tick)
@@ -344,8 +363,10 @@ def main():
                 elif not enable and state['hb_src'] is not None:
                     GLib.source_remove(state['hb_src']); state['hb_src'] = None
                     ble_send_label('hb_off')
+                return
+
+        # raw string command (non-JSON)
         elif isinstance(obj, str):
-            # example text command: "ping"
             if obj.strip().lower() == 'ping':
                 ble_send_label('pong')
 
@@ -368,11 +389,13 @@ def main():
 
     def on_client_subscribed():
         state['client_connected'] = True
-        state['t_conn_start'] = time.time()
+        state['t_conn_start'] = time.monotonic()  # ← monotonic
         print('\n[BLE] Client subscribed (connected)')
         GLib.idle_add(_unregister_adv)  # stop advertising once connected
         # send immediate hello + start heartbeat
         ble_send_label('hello')
+        # request phone time as soon as notifications are enabled (safe point)
+        ble_send({"cmd": "time_sync_req"})
         start_heartbeat()
 
     def on_client_unsubscribed():
@@ -399,7 +422,7 @@ def main():
                 print('\n[BLE][TX] error:', e); time.sleep(0.5)
     threading.Thread(target=tx_worker, daemon=True).start()
 
-    # Rolling status ticker
+    # Rolling status ticker (stderr to avoid clobbering JSON on stdout)
     def _status_tick():
         state['spin_idx'] = (state['spin_idx'] + 1) % len(_spinner_frames)
         sp = _spinner_frames[state['spin_idx']]
@@ -408,8 +431,10 @@ def main():
         adv_dur  = _fmt_dur((now - state['t_adv_start']) if adv and state['t_adv_start'] else 0)
         conn_dur = _fmt_dur((now - state['t_conn_start']) if conn and state['t_conn_start'] else 0)
         line = f"\r[BLE]{sp} adv={'ON ' if adv else 'OFF'} {adv_dur} | conn={'YES' if conn else 'NO '} {conn_dur}    "
-        try: sys.stdout.write(line); sys.stdout.flush()
-        except Exception: pass
+        try:
+            sys.stderr.write(line); sys.stderr.flush()
+        except Exception:
+            pass
         return True
     if RUN_LIVE_BLE_DIAGNOSTICS:
         GLib.timeout_add(500, _status_tick)

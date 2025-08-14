@@ -7,15 +7,15 @@ import threading
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Sequence
 
+# functions
+from py_files.time.time_softclock import _now_ms
+
 # constant
 from py_files.fn_cfg import RUN_SQL_DIAGNOSTICS, RUN_JSON_DIAGNOSTICS
 
 _DEFAULT_DB = "posture_spool.db"
 
 # timestamp
-def _now_ms() -> int:
-	return int(time.time() * 1000)
-
 # create SQL table if it doesn't exist
 def _ensure_schema(conn: sqlite3.Connection) -> None:
 	conn.execute("""

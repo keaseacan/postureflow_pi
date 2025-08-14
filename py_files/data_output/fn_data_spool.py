@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Sequence
 
 # constant
-from py_files.fn_cfg import RUN_JSON_DIAGNOSTICS
+from py_files.fn_cfg import RUN_SQL_DIAGNOSTICS, RUN_JSON_DIAGNOSTICS
 
 _DEFAULT_DB = "posture_spool.db"
 
@@ -67,9 +67,9 @@ class Spool:
 				json.dumps(ev.meta, separators=(",", ":")) if ev.meta else None)
 			)
 			row_id = cur.lastrowid
-			if RUN_JSON_DIAGNOSTICS:
+			if RUN_SQL_DIAGNOSTICS:
 				try:
-						print(json.dumps({
+						print("[SQL_TBL]", json.dumps({
 								"type": "spool_enqueued",
 								"id": row_id,
 								"ts_ms": ev.ts_ms,
@@ -259,7 +259,7 @@ class SpoolWorker(threading.Thread):
 
 						if RUN_JSON_DIAGNOSTICS:
 							try:
-								print(json.dumps({"type": "spool_batch_add", "event": e},
+								print("[JSON_APPEND]", json.dumps({"type": "spool_batch_add", "event": e},
 																separators=(",", ":"), ensure_ascii=False), flush=True)
 							except Exception as ex:
 								print(f"[DEBUG] batch-add print failed: {ex}", flush=True)

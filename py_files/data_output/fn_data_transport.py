@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 # functions
 from py_files.bt.bt_transport import ble_send
+from py_files.bt.bt_server import ble_is_ready
 
 # constants
 from py_files.fn_cfg import RUN_JSON_DIAGNOSTICS
@@ -17,6 +18,11 @@ class ChangeEventTransport:
     self.include_label = include_label
 
   def send_batch(self, batch_events: List[Dict[str, Any]]) -> bool:
+    if not ble_is_ready():
+      if RUN_JSON_DIAGNOSTICS:
+          print('{"type":"outbox_skip","reason":"ble_not_ready","n":%d}' % len(batch_events))
+      return False
+
     wire = []
     for e in batch_events:
       item = {

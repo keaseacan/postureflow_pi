@@ -73,6 +73,15 @@ def ble_send_label(label: str, ts_ms: Optional[int]=None, **extra):
         payload.update(extra)
     ble_send(payload)
 
+_ble_ready = False
+
+def ble_set_ready(v: bool):
+    global _ble_ready
+    _ble_ready = bool(v)
+
+def ble_is_ready() -> bool:
+    return _ble_ready
+
 # --- public hooks/shims for transport integration (2-way API) ---
 _rx_handler = None  # fn(dict|list|str|bytes) -> None
 
@@ -390,6 +399,7 @@ def main():
     def on_client_subscribed():
         state['client_connected'] = True
         state['t_conn_start'] = time.monotonic()  # ← monotonic
+        ble_set_ready(True)
         print('\n[BLE] Client subscribed (connected)')
         GLib.idle_add(_unregister_adv)  # stop advertising once connected
         # send immediate hello + start heartbeat
@@ -401,6 +411,7 @@ def main():
     def on_client_unsubscribed():
         state['client_connected'] = False
         state['t_conn_start'] = None
+        ble_set_ready(False)
         print('\n[BLE] Client unsubscribed (disconnected)')
         stop_heartbeat()
         exit_pairing_mode()

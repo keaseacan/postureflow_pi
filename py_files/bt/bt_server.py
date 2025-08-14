@@ -14,7 +14,7 @@ import dbus
 import dbus.exceptions
 import dbus.mainloop.glib
 import dbus.service
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Union
 from gi.repository import GLib
 
 # config constants
@@ -327,7 +327,7 @@ def main():
         GLib.idle_add(_register_adv)
 
     # ---- Built-in RX command handler (fallback if no external handler set) ----
-    def on_rx_cmd(obj: dict|str|bytes):
+    def on_rx_cmd(obj: Union[dict, str, bytes]):
         if isinstance(obj, dict):
             cmd = str(obj.get('cmd', '')).lower()
             if cmd == 'ping':

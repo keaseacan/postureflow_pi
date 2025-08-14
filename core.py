@@ -156,3 +156,8 @@ def main():
     except Exception:
       pass
     sys.exit(exit_code)
+
+from core import main
+
+if __name__ == "__main__":
+  main()

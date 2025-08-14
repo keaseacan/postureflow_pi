@@ -3,7 +3,7 @@ import json
 from typing import Optional, Any
 
 # functions
-from py_files.core import start_services, stop_services, _services_running
+from core import start_services, stop_services, _services_running
 from py_files.bt.bt_transport import ble_send
 from py_files.data_output.fn_data_outbox import ack as outbox_ack
 

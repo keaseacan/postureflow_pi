@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Sequence
 
 # functions
-from py_files.time.time_softclock import _now_ms
+from py_files.time.time_main import _now_ms
 
 # constant
 from py_files.fn_cfg import RUN_SQL_DIAGNOSTICS, RUN_JSON_DIAGNOSTICS

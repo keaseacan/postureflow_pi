@@ -21,7 +21,7 @@ from gi.repository import GLib
 from py_files.fn_cfg import DEVICE_NAME, GPIO_BUTTON_PIN, BUTTON_HOLD_SEC, DEMO_HEARTBEAT, DEMO_HEARTBEAT_SEC
 from py_files.fn_cfg import NUS_SERVICE_UUID, NUS_RX_UUID, NUS_TX_UUID, ADVERTISE_SERVICE_UUIDS
 from py_files.fn_cfg import RUN_LIVE_BLE_DIAGNOSTICS
-from py_files.time.time_softclock import _now_ms, apply_phone_time_sync
+from py_files.time.time_main import _now_ms, apply_phone_time_sync
 
 # ---------- BlueZ constants ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'

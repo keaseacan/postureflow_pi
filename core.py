@@ -53,9 +53,9 @@ def start_services():
       _feat_q = start_audio_pipeline()
       if RUN_CORE_DIAGNOSTICS: print("[OK] start_audio_pipeline")
 
-      def _on_emit(ev: Any):
+      def _on_emit(idx: int, ts_ms: int):
         try:
-          emit_classification(ev)
+          emit_classification({"idx": int(idx), "ts_ms": int(ts_ms)})
         except Exception as e:
           if RUN_CORE_DIAGNOSTICS: print("[OUTBOX] emit error:", repr(e))
 

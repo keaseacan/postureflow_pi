@@ -5,6 +5,7 @@ import time
 import uuid
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List, Sequence
 
 # functions
@@ -12,17 +13,16 @@ from py_files.time.time_main import _now_ms
 
 # constant
 from py_files.fn_cfg import RUN_SQL_DIAGNOSTICS, RUN_JSON_DIAGNOSTICS
-from py_files.model.fn_classification_main import class_map
 
 _DEFAULT_DB = "posture_spool.db"
 
-from datetime import datetime, timezone, timedelta
+
 
 SGT = timezone(timedelta(hours=8))  # Asia/Singapore (no DST)
 
 def tsms_to_ddmmyyyy(ts_ms: int, tz=SGT) -> str:
     """Epoch milliseconds → 'ddmmyyyy' in the given timezone."""
-    return datetime.fromtimestamp(ts_ms / 1000, tz).strftime('%d%m%Y')
+    return datetime.fromtimestamp(ts_ms / 1000, tz).strftime('%d%m%Y %H:%M:%S')
 
 # timestamp
 # create SQL table if it doesn't exist

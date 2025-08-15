@@ -259,10 +259,8 @@ class SpoolWorker(threading.Thread):
 					for r in rows:
 						ids.append(r["id"])
 						e = {
-									"id": r["id"],
 									"ts_ms": r["ts_ms"],
 									"real_time": tsms_to_ddmmyyyy(int(r["ts_ms"])),
-									"posture": class_map[r["ts_ms"]],
 									"idx": r["cls_idx"]
 						}
 						events.append(e)

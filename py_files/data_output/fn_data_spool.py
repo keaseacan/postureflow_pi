@@ -13,7 +13,7 @@ from py_files.time.time_main import _now_ms
 
 # constant
 from py_files.fn_cfg import RUN_SQL_DIAGNOSTICS, RUN_JSON_DIAGNOSTICS
-
+from py_files.model.fn_classification_main import class_map
 _DEFAULT_DB = "posture_spool.db"
 
 
@@ -261,7 +261,7 @@ class SpoolWorker(threading.Thread):
 						e = {
 									"ts_ms": r["ts_ms"],
 									"real_time": tsms_to_ddmmyyyy(int(r["ts_ms"])),
-									"idx": r["cls_idx"]
+									"posture": class_map[int(r["cls_idx"])]
 						}
 						events.append(e)
 

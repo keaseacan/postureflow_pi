@@ -252,8 +252,7 @@ class SpoolWorker(threading.Thread):
 						e = {
 									"id": r["id"],
 									"ts_ms": r["ts_ms"],
-									"cls": {"idx": r["cls_idx"], "label": r["cls_label"], "score": r["score"]},
-									"meta": json.loads(r["extras"]) if r["extras"] else None
+									"cls": {"idx": r["cls_idx"]}
 								}
 						events.append(e)
 

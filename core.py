@@ -4,17 +4,16 @@ import sys
 import signal
 import threading
 import traceback
-import json
-from typing import Optional, Any
 
 # functions
-from py_files.bt.bt_transport import init_ble, start_ble, stop_ble, join_ble, ble_send
+from py_files.bt.bt_transport import start_ble, stop_ble, join_ble
+from py_files.bt.bt_protocol import init_protocol
 from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox, ack as outbox_ack
 from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
 from py_files.time.time_softclock import setup_i2c
-from py_files.time.time_main import init_clock, apply_phone_time_sync, _now_ms
+from py_files.time.time_main import init_clock
 
 # diagnostic constants
 from py_files.fn_cfg import RUN_CORE_DIAGNOSTICS
@@ -126,98 +125,6 @@ def _on_signal(sig, frame):
 signal.signal(signal.SIGINT, _on_signal)
 signal.signal(signal.SIGTERM, _on_signal)
 
-# ---- BLE reply handling ----
-def _handle_ble_command(msg: Any):
-  """
-  Supports: start | stop | status | ack | time_sync
-  msg may be bytes/str/json/dict. Replies via ble_send(...) as JSON (dict).
-  """
-  def reply(obj: dict):
-      try:
-          ble_send(obj)  # <-- pass dict; ble_send will json.dumps for you
-      except Exception:
-          pass
-
-  # ---- Normalize input to a dict 'obj' ----
-  obj: Optional[dict] = None
-  if isinstance(msg, (bytes, bytearray)):
-      s = msg.decode("utf-8", "ignore").strip()
-      try:
-          obj = json.loads(s)
-      except Exception:
-          obj = {"cmd": s}
-  elif isinstance(msg, str):
-      s = msg.strip()
-      try:
-          obj = json.loads(s)
-      except Exception:
-          obj = {"cmd": s}
-  elif isinstance(msg, dict):
-      obj = msg.copy()
-  else:
-      reply({"ok": False, "err": "bad_type"})
-      return
-
-  cmd = str(obj.get("cmd", "")).strip().lower()
-  if not cmd:
-      reply({"ok": False, "err": "bad_command"})
-      return
-
-  # ---- Commands ----
-  if cmd == "ack":
-      ids = obj.get("ids", [])
-      if not isinstance(ids, list):
-          reply({"ok": False, "err": "ack.ids_not_list"})
-          return
-      if outbox_ack is None:
-          reply({"ok": False, "err": "ack_handler_unavailable"})
-          return
-      try:
-          outbox_ack([int(i) for i in ids])
-          reply({"ok": True, "cmd": "ack", "n": len(ids)})
-      except Exception as e:
-          reply({"ok": False, "err": f"bad_ack:{e}"})
-      return
-
-  if cmd == "time_sync":
-      # Phone should send: {"cmd":"time_sync","epoch_ms": <utc_ms>}
-      epoch_ms = obj.get("epoch_ms")
-      if epoch_ms is None:
-          reply({"ok": False, "err": "missing_epoch_ms"})
-          return
-      try:
-          epoch_ms = int(epoch_ms)
-      except Exception:
-          reply({"ok": False, "err": "bad_epoch_ms"})
-          return
-
-      drift_ms = abs(_now_ms() - epoch_ms)
-      if drift_ms > 1000:
-          sys_ok, rtc_ok = apply_phone_time_sync(epoch_ms)
-      else:
-          # Already in sync (≤1s drift); avoid thrashing system/RTC
-          sys_ok = rtc_ok = True
-      reply({"ok": True, "cmd": "time_sync", "drift_ms": drift_ms, "sys_ok": sys_ok, "rtc_ok": rtc_ok})
-      return
-
-  if cmd == "start":
-      start_services()
-      reply({"ok": True, "state": "running"})
-      return
-
-  if cmd == "stop":
-      stop_services()
-      reply({"ok": True, "state": "stopped"})
-      return
-
-  if cmd == "status":
-      reply({"ok": True, "status": {"running": _services_running}})
-      return
-
-  # Unknown
-  reply({"ok": False, "err": f"unknown_cmd:{cmd}"})
-
-
 # ---------- Main ----------
 def main():
   exit_code = 0
@@ -226,12 +133,14 @@ def main():
     start_services()
 
     # Init + start BLE transport (wrapper style)
-    init_ble(
-      on_command=_handle_ble_command,
-      service_hooks=(stop_services, start_services),
-      device_name="PosturePi",
-      demo_heartbeat=False,
-      diag=RUN_CORE_DIAGNOSTICS,
+    init_protocol(
+        on_start=start_services,
+        on_stop=stop_services,
+        on_status=lambda: {"running": _services_running},
+        on_ack=outbox_ack,
+        device_name="PosturePi",
+        demo_heartbeat=False,
+        diag=RUN_CORE_DIAGNOSTICS,
     )
     start_ble()
 
@@ -250,8 +159,6 @@ def main():
     except Exception:
       pass
     sys.exit(exit_code)
-
-from core import main
 
 if __name__ == "__main__":
   main()

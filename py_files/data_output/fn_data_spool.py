@@ -252,8 +252,7 @@ class SpoolWorker(threading.Thread):
 						e = {
 									"id": r["id"],
 									"ts_ms": r["ts_ms"],
-									"cls": {"idx": r["cls_idx"]}
-								}
+									"idx": r["cls_idx"]}
 						events.append(e)
 
 						if RUN_JSON_DIAGNOSTICS:

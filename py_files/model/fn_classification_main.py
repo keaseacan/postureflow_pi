@@ -62,7 +62,7 @@ def start_classification(
       except KeyError:
         t_wall = time.time()  # fallback if producer didn't include t_abs_start
       window_start_ms = int(round(t_wall * 1000.0))
-
+      """
       out = {
         "idx": int(idx),
         "label": label,
@@ -71,6 +71,8 @@ def start_classification(
         "t": t_wall,             # keep as seconds like before
         "IMF": res["IMF"],       # drop if you don't need it downstream
       }
+      """
+      print(f"State: {label}, Duration: {float(res["Duration_ms"])}\r\n")
 
       """
       # ---- Optional diagnostics -------------------------------------------

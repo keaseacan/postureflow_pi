@@ -71,7 +71,6 @@ def start_classification(
         "t": t_wall,             # keep as seconds like before
         "IMF": res["IMF"],       # drop if you don't need it downstream
       }
-      print(out)
 
       """
       # ---- Optional diagnostics -------------------------------------------

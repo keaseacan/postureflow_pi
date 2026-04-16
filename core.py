@@ -32,13 +32,13 @@ def pi_setup():
   print("Setup: initializing hardware...")
   setup_i2c()
   if RUN_CORE_DIAGNOSTICS: print("[OK] setup_i2c")
-  init_clock()
-  if RUN_CORE_DIAGNOSTICS: print("[OK] clock initialised")
+  # init_clock()
+  # if RUN_CORE_DIAGNOSTICS: print("[OK] clock initialised")
 
   try:
-    init_outbox(transport=ChangeEventTransport)
+    # init_outbox(transport=ChangeEventTransport)
     if RUN_CORE_DIAGNOSTICS: print("[OK] init_outbox")
-    reset_session()
+    # reset_session()
     if RUN_CORE_DIAGNOSTICS: print("[OK] reset_session")
   except Exception as e:
     if RUN_CORE_DIAGNOSTICS: print("[FAIL] init_outbox:", repr(e))
@@ -113,6 +113,7 @@ def _graceful_shutdown(_sig=None, _frame=None):
     stop_services()
   except Exception:
     pass
+  """
   try:
     stop_ble()
   except Exception:
@@ -121,7 +122,8 @@ def _graceful_shutdown(_sig=None, _frame=None):
     close_outbox()
   except Exception:
     pass
-
+  """
+    
 def _on_signal(sig, frame):
   if RUN_CORE_DIAGNOSTICS: print(f"[SHUTDOWN] got signal {sig}; stopping…")
   _shutdown_ev.set()   # actual cleanup in finally
@@ -159,10 +161,12 @@ def main():
     traceback.print_exc()
   finally:
     _graceful_shutdown()
+    """
     try:
       join_ble(timeout=1.5)
     except Exception:
       pass
+    """
     sys.exit(exit_code)
 
 if __name__ == "__main__":

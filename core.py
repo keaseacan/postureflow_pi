@@ -6,14 +6,14 @@ import threading
 import traceback
 
 # functions
-from py_files.bt.bt_transport import start_ble, stop_ble, join_ble
-from py_files.bt.bt_protocol import init_protocol
-from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox, ack as outbox_ack
-from py_files.data_output.fn_data_transport import ChangeEventTransport
+# from py_files.bt.bt_transport import start_ble, stop_ble, join_ble
+# from py_files.bt.bt_protocol import init_protocol
+# from py_files.data_output.fn_data_outbox import init_outbox, reset_session, emit as emit_classification, close_outbox, ack as outbox_ack
+# from py_files.data_output.fn_data_transport import ChangeEventTransport
 from py_files.record_process_audio.fn_record_main import start_audio_pipeline, stop_audio_pipeline
 from py_files.model.fn_classification_main import start_classification, stop_classification
 from py_files.time.time_softclock import setup_i2c
-from py_files.time.time_main import init_clock
+# from py_files.time.time_main import init_clock
 
 # diagnostic constants
 from py_files.fn_cfg import RUN_CORE_DIAGNOSTICS
@@ -132,6 +132,7 @@ signal.signal(signal.SIGINT, _on_signal)
 signal.signal(signal.SIGTERM, _on_signal)
 
 # ---------- Main ----------
+"""
 def main():
   exit_code = 0
   try:
@@ -139,7 +140,7 @@ def main():
     start_services()
 
     # Init + start BLE transport (wrapper style)
-    """
+    
     init_protocol(
         on_start=start_services,
         on_stop=stop_services,
@@ -150,7 +151,7 @@ def main():
         diag=RUN_CORE_DIAGNOSTICS,
     )
     start_ble()
-    """
+    
     if RUN_CORE_DIAGNOSTICS: print("[MAIN] services running; BLE transport ready. Press GPIO17 to pair.")
     while not _shutdown_ev.is_set():
       time.sleep(0.5)
@@ -161,13 +162,33 @@ def main():
     traceback.print_exc()
   finally:
     _graceful_shutdown()
-    """
+    
     try:
       join_ble(timeout=1.5)
     except Exception:
       pass
-    """
+    
     sys.exit(exit_code)
+"""
+
+def main():
+  try:
+    setup_i2c()
+    init_clock()
+
+    feat_q = start_audio_pipeline()
+
+    def debug_emit(idx, ts_ms):
+        print(f"[CLASS] {idx} @ {ts_ms}")
+
+    start_classification(feat_q, on_emit=debug_emit)
+
+    while True:
+        time.sleep(0.1)
+
+  except KeyboardInterrupt:
+    stop_classification()
+    stop_audio_pipeline()
 
 if __name__ == "__main__":
   main()

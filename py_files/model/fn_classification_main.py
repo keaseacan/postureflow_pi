@@ -71,11 +71,13 @@ def start_classification(
         "t": t_wall,             # keep as seconds like before
         "IMF": res["IMF"],       # drop if you don't need it downstream
       }
+      print(out)
 
+      """
       # ---- Optional diagnostics -------------------------------------------
       if RUN_CLASSIFICATION_DIAGNOSTICS:
         try:
-          print(f"[PRED] idx={out['idx']} {out['label']} score={margin:.3f} "
+          print(f"{out['label']} score={margin:.3f} "
                 f"dur={out['dur_ms']:.0f} ms env={out['env']} t={out['t']:.3f}")
         except Exception:
           pass
@@ -92,6 +94,7 @@ def start_classification(
         handler(out)
       except Exception as e:
         print(f"[CLS] handler error: {e}")
+        """
 
   _cls_thread = threading.Thread(target=_worker, daemon=True, name="classification")
   _cls_thread.start()

@@ -56,7 +56,10 @@ def start_services():
     try:
       _feat_q = start_audio_pipeline()
       if RUN_CORE_DIAGNOSTICS: print("[OK] start_audio_pipeline")
+  
+      start_classification(_feat_q)
 
+      """
       def _on_emit(idx: int, ts_ms: int):
         try:
           emit_classification(int(idx), int(ts_ms))
@@ -71,6 +74,7 @@ def start_services():
         if RUN_CORE_DIAGNOSTICS:
           print("[WARN] start_classification() did not accept on_emit; "
                 "outbox will not receive live events from classifier.")
+      """
 
       _services_running = True
     except Exception as e:
@@ -133,6 +137,7 @@ def main():
     start_services()
 
     # Init + start BLE transport (wrapper style)
+    """
     init_protocol(
         on_start=start_services,
         on_stop=stop_services,
@@ -143,7 +148,7 @@ def main():
         diag=RUN_CORE_DIAGNOSTICS,
     )
     start_ble()
-
+    """
     if RUN_CORE_DIAGNOSTICS: print("[MAIN] services running; BLE transport ready. Press GPIO17 to pair.")
     while not _shutdown_ev.is_set():
       time.sleep(0.5)

@@ -174,7 +174,7 @@ def main():
 def main():
   try:
     setup_i2c()
-    init_clock()
+    # init_clock()
 
     feat_q = start_audio_pipeline()
 

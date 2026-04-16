@@ -47,7 +47,7 @@ def start_classification(
 
     while not _cls_stop_evt.is_set():
       try:
-        res = feat_q.get(timeout=0.5)
+        res = feat_q.get(timeout=0.1)
       except queue.Empty:
         continue
 

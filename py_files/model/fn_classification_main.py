@@ -72,7 +72,7 @@ def start_classification(
         "IMF": res["IMF"],       # drop if you don't need it downstream
       }
       """
-      print(f"State: {label}, Duration: {float(res["Duration_ms"])}\r\n")
+      print(f"State: {label}, Duration: {float(res['Duration_ms'])}\r\n")
 
       """
       # ---- Optional diagnostics -------------------------------------------
